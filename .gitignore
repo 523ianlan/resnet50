@@ -1,0 +1,13 @@
+# Python 產生的暫存檔
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 模型權重檔案 (你的 ResNet50 訓練結果)
+*.pth
+*.pt
+*.h5
+
+# 隱藏資料夾
+.ipynb_checkpoints/
+.vscode/

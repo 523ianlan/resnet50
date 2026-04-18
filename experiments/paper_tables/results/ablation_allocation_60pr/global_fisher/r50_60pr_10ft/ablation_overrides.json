@@ -1,0 +1,8 @@
+{
+  "name": "global_fisher",
+  "overrides": {
+    "target_compression": 0.6,
+    "allocation_strategy": "global_fisher",
+    "stage2_score_metric": "fisher"
+  }
+}

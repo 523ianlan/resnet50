@@ -1,0 +1,9 @@
+{
+  "name": "fisher",
+  "overrides": {
+    "target_compression": 0.6,
+    "uncertainty_alpha": 0.0,
+    "use_fisher_scores": true,
+    "stage2_score_metric": "fisher"
+  }
+}

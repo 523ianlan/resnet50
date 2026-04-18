@@ -1,0 +1,137 @@
+{
+  "experiment_name": "ResNet50_SecondOrderPruning_60pr",
+  "seed": 42,
+  "device": "cuda",
+  "train_root": "D:/ImageNet_Organized/train",
+  "val_root": "D:/ImageNet_Organized/validation",
+  "batch_size": 256,
+  "num_workers": 8,
+  "pin_memory": true,
+  "persistent_workers": true,
+  "prefetch_factor": 4,
+  "prefetch_to_gpu": false,
+  "channels_last": false,
+  "enable_tf32": true,
+  "profile_data_time": false,
+  "profile_interval": 50,
+  "augmentation": {
+    "train": {
+      "random_resized_crop": 224,
+      "random_horizontal_flip": true,
+      "color_jitter": [
+        0.2,
+        0.2,
+        0.2,
+        0.1
+      ],
+      "auto_augment": null,
+      "random_erasing": 0.0,
+      "mixup_alpha": 0.0,
+      "cutmix_alpha": 0.0,
+      "mixup_prob": 0.5
+    },
+    "val": {
+      "resize": 256,
+      "center_crop": 224
+    }
+  },
+  "target_compression": 0.6,
+  "min_rank": 16,
+  "svd_epsilon": 1e-12,
+  "mc_samples": 20,
+  "mc_dropout_p": 0.1,
+  "calib_batches": 0,
+  "calib_split_ratio": 0.0,
+  "calib_samples": 5000,
+  "calib_seed": 42,
+  "calib_exclude_from_train": true,
+  "calib_use_val_transform": true,
+  "uncertainty_epsilon": 1e-08,
+  "uncertainty_alpha": 0.0,
+  "uncertainty_log": true,
+  "uncertainty_clip_percentile": 0.0,
+  "uncertainty_var_floor": 1e-06,
+  "uncertainty_metric": "mu_over_var",
+  "fisher_batches": 100,
+  "fisher_approximation": "diagonal",
+  "accumulate_grad_sign": true,
+  "fisher_first_order_mode": "mean_abs",
+  "fisher_first_order_weight": 1.0,
+  "fisher_second_order_weight": 0.5,
+  "use_fisher_scores": false,
+  "stage2_score_metric": "magnitude",
+  "use_log_s": true,
+  "allocation_strategy": "binary_search",
+  "pruning_clip_low": 0.1,
+  "pruning_clip_high": 0.9,
+  "binary_search_iterations": 50,
+  "binary_search_low": 0.0,
+  "binary_search_high": 5.0,
+  "binary_search_tolerance": 0.001,
+  "fine_tune_epochs": 10,
+  "base_lr": 0.0001,
+  "fine_tune_lr": 0.0001,
+  "weight_decay": 0.0001,
+  "fine_tune_weight_decay": 0.0001,
+  "freeze_epoch": 85,
+  "freeze_lr": null,
+  "layer_decay": 1.0,
+  "warmup_epochs": 0,
+  "warmup_init_lr": 1e-06,
+  "min_lr_ratio": 0.01,
+  "decay_end_ratio": 0.75,
+  "optimizer": {
+    "name": "adamw",
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "eps": 1e-08
+  },
+  "scheduler": {
+    "name": "cosine",
+    "cosine": {
+      "eta_min_ratio": 0.01
+    },
+    "step": {
+      "step_size": 30,
+      "gamma": 0.1
+    }
+  },
+  "use_label_smoothing": true,
+  "label_smoothing": 0.1,
+  "use_gradient_clip": true,
+  "clip_grad_norm": 1.0,
+  "stochastic_depth_prob": 0.0,
+  "mixed_precision": true,
+  "gradient_accumulation_steps": 1,
+  "deterministic": true,
+  "cudnn_benchmark": false,
+  "early_stopping_patience": 15,
+  "early_stopping_min_delta": 0.001,
+  "eval_max_batches": 0,
+  "train_max_batches": 0,
+  "topk": [
+    1,
+    5
+  ],
+  "test_interval": 1,
+  "save_best": true,
+  "log_interval": 200,
+  "save_dir": "./experiments/paper_tables/results/ablation_scoring_60pr\\magnitude",
+  "logging": {
+    "level": "INFO",
+    "wandb": false,
+    "tensorboard": true,
+    "save_checkpoints": true,
+    "checkpoint_interval": 5
+  },
+  "visualization": {
+    "plot_curves": true,
+    "plot_sensitivity": true,
+    "plot_allocation": true,
+    "save_format": "png",
+    "dpi": 150
+  },
+  "custom_tag": ""
+}

@@ -1,0 +1,8 @@
+Stage-2 Score Overlap (averages)
+overlap_taylor_fisher: 1.0000
+overlap_fisher_hessian: 0.9885
+overlap_taylor_hessian: 0.9885
+rho_taylor_fisher: 1.0000
+rho_fisher_hessian: 0.9970
+rho_taylor_hessian: 0.9969
+rho_first_fisherdiag: 0.9969

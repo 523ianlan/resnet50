@@ -1,0 +1,10 @@
+MC Dropout Curve Summary
+================================================================================
+Save dir: d:\UFALP\resnet50\experiments\paper_tables\results\mc_dropout_curve_20260417_213932_sanity_curve
+Selected layers: 1
+Dropout grid: [0.05]
+MC samples grid: [2]
+Dominance max-share (higher means one-layer dominance):
+  K=2: {'0.0500': 1.0}
+JSON report: d:\UFALP\resnet50\experiments\paper_tables\results\mc_dropout_curve_20260417_213932_sanity_curve\mc_dropout_curve_report.json
+CSV points: d:\UFALP\resnet50\experiments\paper_tables\results\mc_dropout_curve_20260417_213932_sanity_curve\mc_dropout_curve_points.csv

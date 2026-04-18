@@ -1,0 +1,39 @@
+Fisher Methods Report
+=====================
+
+Baseline Method: Hessian Full
+GT Loss Increase Batches: 5
+GT Loss Increase Total Time (sec): 102.80
+
+Timing Summary (sum over layers):
+ Batches             Method  Elapsed_Sec
+      10   Energy (Sigma^2)     0.001066
+      10        Fisher Diag     0.001184
+      10        Fisher Full     0.001375
+      10 Gradient Magnitude     0.001185
+      10       Hessian Diag     0.001635
+      10       Hessian Full     0.023596
+      10  Magnitude (Sigma)     0.001051
+      10   Taylor 1st-order     0.001392
+      10 True Loss Increase     0.001262
+      50   Energy (Sigma^2)     0.001492
+      50        Fisher Diag     0.001454
+      50        Fisher Full     0.001499
+      50 Gradient Magnitude     0.001419
+      50       Hessian Diag     0.001720
+      50       Hessian Full     0.002861
+      50  Magnitude (Sigma)     0.001521
+      50   Taylor 1st-order     0.001644
+      50 True Loss Increase     0.001574
+     100   Energy (Sigma^2)     0.001128
+     100        Fisher Diag     0.001292
+     100        Fisher Full     0.001469
+     100 Gradient Magnitude     0.001207
+     100       Hessian Diag     0.001690
+     100       Hessian Full     0.002582
+     100  Magnitude (Sigma)     0.001230
+     100   Taylor 1st-order     0.001197
+     100 True Loss Increase     0.001269
+
+Note: Elapsed_Sec is correlation/overlap computation time per method.
+GT computation time is reported separately above.

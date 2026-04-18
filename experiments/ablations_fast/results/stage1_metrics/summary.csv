@@ -1,0 +1,5 @@
+name,uncertainty_metric,report_path,final_top1,final_accuracy_change,achieved_compression,target_compression
+metric_mu_over_var,mu_over_var,./experiments/ablations_fast/results/stage1_metrics\metric_mu_over_var\r50_80pr_1ft\complete_pruning_report.txt,42.46,-33.64,80.0,80.0
+metric_mu,mu,./experiments/ablations_fast/results/stage1_metrics\metric_mu\r50_80pr_1ft\complete_pruning_report.txt,43.49,-32.61,80.0,80.0
+metric_var,var,./experiments/ablations_fast/results/stage1_metrics\metric_var\r50_80pr_1ft\complete_pruning_report.txt,43.97,-32.13,80.0,80.0
+metric_inv_var,inv_var,./experiments/ablations_fast/results/stage1_metrics\metric_inv_var\r50_80pr_1ft\complete_pruning_report.txt,38.04,-38.06,80.0,80.0

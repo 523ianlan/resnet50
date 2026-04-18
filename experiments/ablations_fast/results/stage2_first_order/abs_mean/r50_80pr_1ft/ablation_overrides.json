@@ -1,0 +1,7 @@
+{
+  "name": "abs_mean",
+  "overrides": {
+    "fisher_first_order_mode": "abs_mean"
+  },
+  "mode": "fast"
+}

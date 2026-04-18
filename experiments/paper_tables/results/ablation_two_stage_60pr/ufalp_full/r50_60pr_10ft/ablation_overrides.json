@@ -1,0 +1,9 @@
+{
+  "name": "ufalp_full",
+  "overrides": {
+    "target_compression": 0.6,
+    "uncertainty_alpha": 1.0,
+    "use_fisher_scores": true,
+    "stage2_score_metric": "fisher"
+  }
+}

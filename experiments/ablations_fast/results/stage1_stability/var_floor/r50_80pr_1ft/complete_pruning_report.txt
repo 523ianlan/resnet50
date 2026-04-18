@@ -1,0 +1,294 @@
+====================================================================================================
+RESNET-50 SECOND-ORDER IMPACT PRUNING COMPLETE REPORT
+====================================================================================================
+Date: 2026-04-04 03:26:57
+Model: ResNet-50
+
+----------------------------------------------------------------------------------------------------
+PRUNING CONFIGURATION
+----------------------------------------------------------------------------------------------------
+Target Compression: 80.0%
+Min Rank: 16
+MC Samples (Stage 1): 20
+MC Dropout p (Stage 1): 0.1
+Calibration Batches (Stage 1): 5
+Fisher Batches (Stage 2): 20
+Train Max Batches (FT): 200
+Eval Max Batches: 0
+Uncertainty Alpha: 1.0
+Pruning Clip Range: [5.0%, 95.0%]
+
+====================================================================================================
+STAGE 1: INTER-LAYER UNCERTAINTY ESTIMATION
+====================================================================================================
+Layer Name                               Type            Stability   
+----------------------------------------------------------------------------------------------------
+conv1                                    Standard        1.000000
+layer1.0.downsample.0                    Standard        0.000003
+layer2.0.downsample.0                    Standard        0.000003
+layer1.0.conv3                           Bottleneck      0.000002
+layer2.0.conv3                           Bottleneck      0.000002
+layer3.0.conv3                           Bottleneck      0.000002
+layer3.0.downsample.0                    Standard        0.000002
+layer1.1.conv3                           Bottleneck      0.000001
+layer4.1.conv3                           Bottleneck      0.000001
+layer4.0.downsample.0                    Standard        0.000001
+layer3.3.conv3                           Bottleneck      0.000001
+layer4.0.conv3                           Bottleneck      0.000001
+layer3.2.conv3                           Bottleneck      0.000001
+layer4.2.conv3                           Bottleneck      0.000001
+layer3.4.conv3                           Bottleneck      0.000001
+layer2.1.conv3                           Bottleneck      0.000001
+layer2.3.conv3                           Bottleneck      0.000001
+layer3.1.conv3                           Bottleneck      0.000001
+layer3.5.conv3                           Bottleneck      0.000001
+layer2.2.conv3                           Bottleneck      0.000000
+layer4.0.conv2                           Standard        0.000000
+layer3.3.conv2                           Standard        0.000000
+layer3.4.conv2                           Standard        0.000000
+layer3.3.conv1                           Bottleneck      0.000000
+layer3.5.conv2                           Standard        0.000000
+layer3.2.conv2                           Standard        0.000000
+layer4.1.conv2                           Standard        0.000000
+layer3.4.conv1                           Bottleneck      0.000000
+layer3.5.conv1                           Bottleneck      0.000000
+layer3.2.conv1                           Bottleneck      0.000000
+layer4.0.conv1                           Bottleneck      0.000000
+layer1.2.conv3                           Bottleneck      0.000000
+layer4.2.conv2                           Standard        0.000000
+layer1.0.conv1                           Bottleneck      0.000000
+layer3.1.conv2                           Standard        0.000000
+layer3.1.conv1                           Bottleneck      0.000000
+layer2.3.conv2                           Standard        0.000000
+layer3.0.conv2                           Standard        0.000000
+layer1.0.conv2                           Standard        0.000000
+layer2.3.conv1                           Bottleneck      0.000000
+layer2.1.conv2                           Standard        0.000000
+layer4.1.conv1                           Bottleneck      0.000000
+layer2.2.conv2                           Standard        0.000000
+layer2.0.conv2                           Standard        0.000000
+layer3.0.conv1                           Bottleneck      0.000000
+layer2.2.conv1                           Bottleneck      0.000000
+layer2.1.conv1                           Bottleneck      0.000000
+layer1.1.conv1                           Bottleneck      0.000000
+layer4.2.conv1                           Bottleneck      0.000000
+layer1.2.conv2                           Standard        0.000000
+layer1.2.conv1                           Bottleneck      0.000000
+layer1.1.conv2                           Standard        0.000000
+layer2.0.conv1                           Bottleneck      0.000000
+
+====================================================================================================
+STAGE 2: INTRA-LAYER FISHER IMPACT ANALYSIS
+====================================================================================================
+Layer Name                               Type            Correlation 
+----------------------------------------------------------------------------------------------------
+conv1                                    Standard        0.5307
+layer1.0.conv1                           Bottleneck      0.7082
+layer1.0.conv2                           Standard        0.7942
+layer1.0.conv3                           Bottleneck      0.9030
+layer1.0.downsample.0                    Standard        0.8296
+layer1.1.conv1                           Bottleneck      0.7922
+layer1.1.conv2                           Standard        0.8863
+layer1.1.conv3                           Bottleneck      0.7747
+layer1.2.conv1                           Bottleneck      0.8665
+layer1.2.conv2                           Standard        0.8247
+layer1.2.conv3                           Bottleneck      0.7616
+layer2.0.conv1                           Bottleneck      0.8188
+layer2.0.conv2                           Standard        0.7289
+layer2.0.conv3                           Bottleneck      0.8518
+layer2.0.downsample.0                    Standard        0.7389
+layer2.1.conv1                           Bottleneck      0.8701
+layer2.1.conv2                           Standard        0.8463
+layer2.1.conv3                           Bottleneck      0.7695
+layer2.2.conv1                           Bottleneck      0.8763
+layer2.2.conv2                           Standard        0.8534
+layer2.2.conv3                           Bottleneck      0.8831
+layer2.3.conv1                           Bottleneck      0.9157
+layer2.3.conv2                           Standard        0.7406
+layer2.3.conv3                           Bottleneck      0.7959
+layer3.0.conv1                           Bottleneck      0.8755
+layer3.0.conv2                           Standard        0.8595
+layer3.0.conv3                           Bottleneck      0.7170
+layer3.0.downsample.0                    Standard        0.7503
+layer3.1.conv1                           Bottleneck      0.7425
+layer3.1.conv2                           Standard        0.8189
+layer3.1.conv3                           Bottleneck      0.6922
+layer3.2.conv1                           Bottleneck      0.8592
+layer3.2.conv2                           Standard        0.8479
+layer3.2.conv3                           Bottleneck      0.8136
+layer3.3.conv1                           Bottleneck      0.8006
+layer3.3.conv2                           Standard        0.7449
+layer3.3.conv3                           Bottleneck      0.7562
+layer3.4.conv1                           Bottleneck      0.7910
+layer3.4.conv2                           Standard        0.7371
+layer3.4.conv3                           Bottleneck      0.7513
+layer3.5.conv1                           Bottleneck      0.8137
+layer3.5.conv2                           Standard        0.6868
+layer3.5.conv3                           Bottleneck      0.7420
+layer4.0.conv1                           Bottleneck      0.8499
+layer4.0.conv2                           Standard        0.8507
+layer4.0.conv3                           Bottleneck      0.7369
+layer4.0.downsample.0                    Standard        0.8642
+layer4.1.conv1                           Bottleneck      0.7562
+layer4.1.conv2                           Standard        0.4331
+layer4.1.conv3                           Bottleneck      0.4643
+layer4.2.conv1                           Bottleneck      0.6596
+layer4.2.conv2                           Standard        0.7131
+layer4.2.conv3                           Bottleneck      0.8969
+
+Average Correlation: 0.7809
+Min Correlation: 0.4331
+Max Correlation: 0.9157
+
+====================================================================================================
+LAYER-WISE PRUNING ALLOCATION
+====================================================================================================
+Layer Name                               Type            Stability  Keep%    Rank         Params(K) 
+----------------------------------------------------------------------------------------------------
+conv1                                    Standard        1.0000     95.0%  60/64        12.66
+layer1.0.conv1                           Bottleneck      0.0000     10.4%  16/64         2.05
+layer1.0.conv2                           Standard        0.0000     10.4%  16/64        10.24
+layer1.0.conv3                           Bottleneck      0.0000     10.4%  16/64         5.12
+layer1.0.downsample.0                    Standard        0.0000     10.4%  16/64         5.12
+layer1.1.conv1                           Bottleneck      0.0000     10.4%  16/64         5.12
+layer1.1.conv2                           Standard        0.0000     10.4%  16/64        10.24
+layer1.1.conv3                           Bottleneck      0.0000     10.4%  16/64         5.12
+layer1.2.conv1                           Bottleneck      0.0000     10.4%  16/64         5.12
+layer1.2.conv2                           Standard        0.0000     10.4%  16/64        10.24
+layer1.2.conv3                           Bottleneck      0.0000     10.4%  16/64         5.12
+layer2.0.conv1                           Bottleneck      0.0000     10.4%  16/128        6.14
+layer2.0.conv2                           Standard        0.0000     10.4%  16/128       20.48
+layer2.0.conv3                           Bottleneck      0.0000     10.4%  16/128       10.24
+layer2.0.downsample.0                    Standard        0.0000     10.4%  26/256       19.97
+layer2.1.conv1                           Bottleneck      0.0000     10.4%  16/128       10.24
+layer2.1.conv2                           Standard        0.0000     10.4%  16/128       20.48
+layer2.1.conv3                           Bottleneck      0.0000     10.4%  16/128       10.24
+layer2.2.conv1                           Bottleneck      0.0000     10.4%  16/128       10.24
+layer2.2.conv2                           Standard        0.0000     10.4%  16/128       20.48
+layer2.2.conv3                           Bottleneck      0.0000     10.4%  16/128       10.24
+layer2.3.conv1                           Bottleneck      0.0000     10.4%  16/128       10.24
+layer2.3.conv2                           Standard        0.0000     10.4%  16/128       20.48
+layer2.3.conv3                           Bottleneck      0.0000     10.4%  16/128       10.24
+layer3.0.conv1                           Bottleneck      0.0000     10.4%  26/256       19.97
+layer3.0.conv2                           Standard        0.0000     10.4%  26/256       66.56
+layer3.0.conv3                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.0.downsample.0                    Standard        0.0000     10.4%  53/512       81.41
+layer3.1.conv1                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.1.conv2                           Standard        0.0000     10.4%  26/256       66.56
+layer3.1.conv3                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.2.conv1                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.2.conv2                           Standard        0.0000     10.4%  26/256       66.56
+layer3.2.conv3                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.3.conv1                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.3.conv2                           Standard        0.0000     10.4%  26/256       66.56
+layer3.3.conv3                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.4.conv1                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.4.conv2                           Standard        0.0000     10.4%  26/256       66.56
+layer3.4.conv3                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.5.conv1                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer3.5.conv2                           Standard        0.0000     10.4%  26/256       66.56
+layer3.5.conv3                           Bottleneck      0.0000     10.4%  26/256       33.28
+layer4.0.conv1                           Bottleneck      0.0000     10.4%  52/512       79.87
+layer4.0.conv2                           Standard        0.0000     10.4%  53/512      271.36
+layer4.0.conv3                           Bottleneck      0.0000     10.4%  53/512      135.68
+layer4.0.downsample.0                    Standard        0.0000     10.4% 106/1024     325.63
+layer4.1.conv1                           Bottleneck      0.0000     10.4%  52/512      133.12
+layer4.1.conv2                           Standard        0.0000     10.4%  53/512      271.36
+layer4.1.conv3                           Bottleneck      0.0000     10.4%  53/512      135.68
+layer4.2.conv1                           Bottleneck      0.0000     10.4%  52/512      133.12
+layer4.2.conv2                           Standard        0.0000     10.4%  52/512      266.24
+layer4.2.conv3                           Bottleneck      0.0000     10.4%  53/512      135.68
+----------------------------------------------------------------------------------------------------
+TOTAL                                                                                      3010.42
+
+====================================================================================================
+PRUNING DETAILS
+====================================================================================================
+Layer Name                               Type            Keep%    Rank         Recon Error 
+----------------------------------------------------------------------------------------------------
+conv1                                    Standard         95.0%  60/64          0.0064
+layer1.0.conv1                           Bottleneck       10.4%  16/64          0.3555
+layer1.0.conv2                           Standard         10.4%  16/64          0.4235
+layer1.0.conv3                           Bottleneck       10.4%  16/64          0.4611
+layer1.0.downsample.0                    Standard         10.4%  16/64          0.5261
+layer1.1.conv1                           Bottleneck       10.4%  16/64          0.4926
+layer1.1.conv2                           Standard         10.4%  16/64          0.5699
+layer1.1.conv3                           Bottleneck       10.4%  16/64          0.5977
+layer1.2.conv1                           Bottleneck       10.4%  16/64          0.4971
+layer1.2.conv2                           Standard         10.4%  16/64          0.6173
+layer1.2.conv3                           Bottleneck       10.4%  16/64          0.5927
+layer2.0.conv1                           Bottleneck       10.4%  16/128         0.6634
+layer2.0.conv2                           Standard         10.4%  16/128         0.8034
+layer2.0.conv3                           Bottleneck       10.4%  16/128         0.7702
+layer2.0.downsample.0                    Standard         10.4%  26/256         0.5521
+layer2.1.conv1                           Bottleneck       10.4%  16/128         0.4541
+layer2.1.conv2                           Standard         10.4%  16/128         0.5234
+layer2.1.conv3                           Bottleneck       10.4%  16/128         0.6340
+layer2.2.conv1                           Bottleneck       10.4%  16/128         0.6950
+layer2.2.conv2                           Standard         10.4%  16/128         0.7526
+layer2.2.conv3                           Bottleneck       10.4%  16/128         0.7697
+layer2.3.conv1                           Bottleneck       10.4%  16/128         0.7297
+layer2.3.conv2                           Standard         10.4%  16/128         0.8080
+layer2.3.conv3                           Bottleneck       10.4%  16/128         0.7775
+layer3.0.conv1                           Bottleneck       10.4%  26/256         0.7413
+layer3.0.conv2                           Standard         10.4%  26/256         0.8131
+layer3.0.conv3                           Bottleneck       10.4%  26/256         0.8107
+layer3.0.downsample.0                    Standard         10.4%  53/512         0.6679
+layer3.1.conv1                           Bottleneck       10.4%  26/256         0.7394
+layer3.1.conv2                           Standard         10.4%  26/256         0.7733
+layer3.1.conv3                           Bottleneck       10.4%  26/256         0.7921
+layer3.2.conv1                           Bottleneck       10.4%  26/256         0.7266
+layer3.2.conv2                           Standard         10.4%  26/256         0.7927
+layer3.2.conv3                           Bottleneck       10.4%  26/256         0.7895
+layer3.3.conv1                           Bottleneck       10.4%  26/256         0.7844
+layer3.3.conv2                           Standard         10.4%  26/256         0.8228
+layer3.3.conv3                           Bottleneck       10.4%  26/256         0.8084
+layer3.4.conv1                           Bottleneck       10.4%  26/256         0.8094
+layer3.4.conv2                           Standard         10.4%  26/256         0.8182
+layer3.4.conv3                           Bottleneck       10.4%  26/256         0.7988
+layer3.5.conv1                           Bottleneck       10.4%  26/256         0.8291
+layer3.5.conv2                           Standard         10.4%  26/256         0.8120
+layer3.5.conv3                           Bottleneck       10.4%  26/256         0.7918
+layer4.0.conv1                           Bottleneck       10.4%  52/512         0.7793
+layer4.0.conv2                           Standard         10.4%  53/512         0.8142
+layer4.0.conv3                           Bottleneck       10.4%  53/512         0.8377
+layer4.0.downsample.0                    Standard         10.4% 106/1024        0.7418
+layer4.1.conv1                           Bottleneck       10.4%  52/512         0.8272
+layer4.1.conv2                           Standard         10.4%  53/512         0.8366
+layer4.1.conv3                           Bottleneck       10.4%  53/512         0.8216
+layer4.2.conv1                           Bottleneck       10.4%  52/512         0.8457
+layer4.2.conv2                           Standard         10.4%  52/512         0.8272
+layer4.2.conv3                           Bottleneck       10.4%  53/512         0.8214
+
+====================================================================================================
+FINE-TUNING LOG
+====================================================================================================
+Epoch   1/1 | Train: Loss=3.9729, Top1=31.95%,  Top5=56.65%| Val: Loss=3.9625, Top1=41.33%, Top5=65.04% | LR=1.00e-06
+  New best model saved (Top1: 41.33%)
+
+====================================================================================================
+ACCURACY RESULTS
+====================================================================================================
+Model State               Top-1 Acc    Top-5 Acc    Change      
+----------------------------------------------------------------------------------------------------
+Original                       76.10%         92.87%    -           
+Pruned (No FT)                  0.17%          0.86%        -75.93%
+Final (After FT)               47.30%         73.83%        -28.80%
+
+====================================================================================================
+RESOURCE SUMMARY
+====================================================================================================
+Metric               Original        Pruned          Reduction      
+----------------------------------------------------------------------------------------------------
+Parameters              25.56M           5.11M           80.0%
+FLOPs                    4.11G           0.82G           80.0%
+
+====================================================================================================
+CONCLUSION
+====================================================================================================
+Target Compression: 80.0%
+Achieved Compression: 80.0%
+Final Accuracy Change: -28.80%
+Final Model Top-1: 47.30%
+
+====================================================================================================

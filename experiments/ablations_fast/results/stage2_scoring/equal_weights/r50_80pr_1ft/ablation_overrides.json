@@ -1,0 +1,9 @@
+{
+  "name": "equal_weights",
+  "overrides": {
+    "use_fisher_scores": true,
+    "fisher_first_order_weight": 1.0,
+    "fisher_second_order_weight": 1.0
+  },
+  "mode": "fast"
+}

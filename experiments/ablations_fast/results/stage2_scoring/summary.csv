@@ -1,0 +1,6 @@
+name,use_fisher_scores,fisher_first_order_weight,fisher_second_order_weight,report_path,final_top1,final_accuracy_change,achieved_compression,target_compression
+fisher_default,True,1.0,0.5,./experiments/ablations_fast/results/stage2_scoring\fisher_default\r50_80pr_1ft\complete_pruning_report.txt,42.46,-33.64,80.0,80.0
+first_only,True,1.0,0.0,./experiments/ablations_fast/results/stage2_scoring\first_only\r50_80pr_1ft\complete_pruning_report.txt,42.46,-33.64,80.0,80.0
+second_only,True,0.0,1.0,./experiments/ablations_fast/results/stage2_scoring\second_only\r50_80pr_1ft\complete_pruning_report.txt,42.67,-33.43,80.0,80.0
+equal_weights,True,1.0,1.0,./experiments/ablations_fast/results/stage2_scoring\equal_weights\r50_80pr_1ft\complete_pruning_report.txt,42.46,-33.64,80.0,80.0
+magnitude_only,False,0.0,0.0,./experiments/ablations_fast/results/stage2_scoring\magnitude_only\r50_80pr_1ft\complete_pruning_report.txt,45.19,-30.91,80.0,80.0
