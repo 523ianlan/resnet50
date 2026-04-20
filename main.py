@@ -638,10 +638,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-<<<<<<< HEAD
-=======
-
-# main upload to github test
-# 112233
-# iiiiii(commit test 1)
->>>>>>> a7638564e25f5c8efda409ac446ebeb9062c0bc8
