@@ -79,7 +79,8 @@ def _wrap_layers_with_dropout(
         if parent is None or layer_name is None:
             continue
         original = layer
-        wrapper = nn.Sequential(original, nn.Dropout2d(p=dropout_p))
+        dropout = nn.Dropout2d(p=dropout_p) if getattr(layer, "layer_kind", "conv") == "conv" else nn.Dropout(p=dropout_p)
+        wrapper = nn.Sequential(original, dropout)
         wrapper = wrapper.to(next(original.parameters()).device)
         if _replace_module(parent, layer_name, wrapper):
             wrapped_layers[name] = wrapper

@@ -30,6 +30,14 @@ class ModelStructureManager:
                     'bias': module.bias is not None,
                     'is_original': True
                 }
+            elif isinstance(module, nn.Linear):
+                structure_info[name] = {
+                    'type': 'linear',
+                    'in_features': module.in_features,
+                    'out_features': module.out_features,
+                    'bias': module.bias is not None,
+                    'is_original': True
+                }
             elif isinstance(module, nn.Sequential) and len(module) == 2:
                 if isinstance(module[0], nn.Conv2d) and isinstance(module[1], nn.Conv2d):
                     conv1, conv2 = module[0], module[1]
@@ -50,6 +58,23 @@ class ModelStructureManager:
                             'stride': conv2.stride,
                             'padding': conv2.padding,
                             'bias': conv2.bias is not None
+                        },
+                        'is_original': False,
+                        'decomposed': True
+                    }
+                elif isinstance(module[0], nn.Linear) and isinstance(module[1], nn.Linear):
+                    linear1, linear2 = module[0], module[1]
+                    structure_info[name] = {
+                        'type': 'decomposed_linear',
+                        'linear1': {
+                            'in_features': linear1.in_features,
+                            'out_features': linear1.out_features,
+                            'bias': linear1.bias is not None
+                        },
+                        'linear2': {
+                            'in_features': linear2.in_features,
+                            'out_features': linear2.out_features,
+                            'bias': linear2.bias is not None
                         },
                         'is_original': False,
                         'decomposed': True
@@ -195,6 +220,20 @@ def generate_report(
                     'params': layer_params,
                     'orig_params': cin * kh * kw * cout + (cout if detail.get('has_bias', False) else 0)
                 })
+            elif 'original_in_features' in detail and 'original_out_features' in detail:
+                in_features = detail['original_in_features']
+                out_features = detail['original_out_features']
+                layer_params = (in_features * rank) + (out_features * rank)
+                if detail.get('has_bias', False):
+                    layer_params += out_features
+
+                calculated_pruned_params += layer_params
+                layer_param_details.append({
+                    'name': name,
+                    'rank': rank,
+                    'params': layer_params,
+                    'orig_params': in_features * out_features + (out_features if detail.get('has_bias', False) else 0)
+                })
     
     # Fix: Trust the comprehensive `pruned_params` computed accurately via `sum(p.numel())`,
     # rather than just the partial convolution parameter sum `calculated_pruned_params`.
@@ -236,7 +275,11 @@ def generate_report(
     
     sorted_importance = sorted(layer_importance_stage1.items(), key=lambda x: x[1], reverse=True)
     for name, score in sorted_importance:
-        layer_type = "Bottleneck" if (name in svd_layers and svd_layers[name].is_bottleneck) else "Standard"
+        layer_obj = svd_layers.get(name)
+        if layer_obj is not None and getattr(layer_obj, "layer_kind", "conv") == "linear":
+            layer_type = "Linear"
+        else:
+            layer_type = "Bottleneck" if (layer_obj is not None and layer_obj.is_bottleneck) else "Standard"
         report_lines.append(f"{name:<40} {layer_type:<15} {score:.6f}")
     
     report_lines.append("")
@@ -258,7 +301,7 @@ def generate_report(
                 corr = np.corrcoef(singular_values[:min_len], impact_scores[:min_len])[0, 1]
                 if not np.isnan(corr):
                     correlations.append(corr)
-                    layer_type = "Bottleneck" if layer.is_bottleneck else "Standard"
+                    layer_type = "Linear" if getattr(layer, "layer_kind", "conv") == "linear" else ("Bottleneck" if layer.is_bottleneck else "Standard")
                     report_lines.append(f"{name:<40} {layer_type:<15} {corr:.4f}")
     
     report_lines.append("")
@@ -284,20 +327,11 @@ def generate_report(
         
         keep_ratio = keep_ratios[name]
         stability = layer_importance_stage1.get(name, 0)
-        layer_type = "Bottleneck" if layer.is_bottleneck else "Standard"
-        
-        rank = int(layer.full_rank * keep_ratio)
-        rank = max(config.min_rank, rank)
-        
-        # Calculate original layer params
-        orig_layer_params = layer.cout * layer.cin * layer.kh * layer.kw
-        if layer.bias is not None:
-            orig_layer_params += layer.cout
-        
-        # Calculate pruned layer params
-        pruned_layer_params = (layer.cin * layer.kh * layer.kw * rank) + (layer.cout * rank)
-        if layer.bias is not None:
-            pruned_layer_params += layer.cout
+        layer_type = "Linear" if getattr(layer, "layer_kind", "conv") == "linear" else ("Bottleneck" if layer.is_bottleneck else "Standard")
+
+        rank = layer.get_keep_count(keep_ratio)
+        orig_layer_params = layer.get_original_param_count()
+        pruned_layer_params = layer.get_pruned_param_count(rank)
         
         total_orig_layer_params += orig_layer_params
         total_pruned_layer_params += pruned_layer_params
@@ -319,7 +353,8 @@ def generate_report(
     report_lines.append("-" * 100)
     
     for name, detail in pruning_details.items():
-        layer_type = "Bottleneck" if detail.get('is_bottleneck', False) else "Standard"
+        detail_kind = detail.get('layer_kind', 'conv')
+        layer_type = "Linear" if detail_kind == "linear" else ("Bottleneck" if detail.get('is_bottleneck', False) else "Standard")
         keep_ratio = detail.get('keep_ratio', 0)
         pruned_rank = detail.get('pruned_rank', 0)
         original_rank = detail.get('original_rank', 0)

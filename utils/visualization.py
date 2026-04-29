@@ -142,8 +142,9 @@ def plot_layer_budget_allocation_r50(
     keep_values = [keep_ratios[name] for name in layer_names]
     importance_values = [layer_importance.get(name, 0.5) for name in layer_names]
     
-    # Distinguish bottleneck and standard layers
-    is_bottleneck = [svd_layers[name].is_bottleneck for name in layer_names]
+    # Distinguish conv bottlenecks, standard conv, and linear layers
+    is_bottleneck = [getattr(svd_layers[name], "is_bottleneck", False) for name in layer_names]
+    layer_kinds = [getattr(svd_layers[name], "layer_kind", "conv") for name in layer_names]
     
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
@@ -155,18 +156,37 @@ def plot_layer_budget_allocation_r50(
     axes[0, 0].grid(True, alpha=0.3)
     
     # 2. Keep ratio vs Importance
-    colors = ['red' if b else 'blue' for b in is_bottleneck]
+    colors = [
+        'red' if bottleneck else ('green' if kind == 'linear' else 'blue')
+        for bottleneck, kind in zip(is_bottleneck, layer_kinds)
+    ]
     axes[0, 1].scatter(importance_values, keep_values, c=colors, alpha=0.6)
     axes[0, 1].set_xlabel('Importance Score (Stage 1)')
     axes[0, 1].set_ylabel('Keep Ratio')
-    axes[0, 1].set_title('Importance vs Keep Ratio (Red=Bottleneck)')
+    axes[0, 1].set_title('Importance vs Keep Ratio (Red=Bottleneck, Green=Linear)')
     axes[0, 1].grid(True, alpha=0.3)
     
     # 3. Layer type statistics
     bottleneck_keep = [keep for keep, b in zip(keep_values, is_bottleneck) if b]
-    standard_keep = [keep for keep, b in zip(keep_values, is_bottleneck) if not b]
-    
-    axes[1, 0].boxplot([bottleneck_keep, standard_keep], labels=['Bottleneck', 'Standard'])
+    standard_keep = [keep for keep, b, kind in zip(keep_values, is_bottleneck, layer_kinds) if not b and kind != 'linear']
+    linear_keep = [keep for keep, kind in zip(keep_values, layer_kinds) if kind == 'linear']
+
+    boxplot_values = []
+    boxplot_labels = []
+    if bottleneck_keep:
+        boxplot_values.append(bottleneck_keep)
+        boxplot_labels.append('Bottleneck')
+    if standard_keep:
+        boxplot_values.append(standard_keep)
+        boxplot_labels.append('Standard')
+    if linear_keep:
+        boxplot_values.append(linear_keep)
+        boxplot_labels.append('Linear')
+    if not boxplot_values:
+        boxplot_values = [keep_values]
+        boxplot_labels = ['All']
+
+    axes[1, 0].boxplot(boxplot_values, labels=boxplot_labels)
     axes[1, 0].set_ylabel('Keep Ratio')
     axes[1, 0].set_title('Keep Ratio by Layer Type')
     axes[1, 0].grid(True, alpha=0.3)
@@ -192,6 +212,7 @@ def plot_layer_budget_allocation_r50(
     type_keep_ratios = {
         'bottleneck': bottleneck_keep,
         'standard': standard_keep,
+        'linear': linear_keep,
         'all': keep_values
     }
     

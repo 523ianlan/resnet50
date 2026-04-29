@@ -68,6 +68,23 @@ def collect_resnet_conv_layers(model: nn.Module) -> List[str]:
     return conv_paths
 
 
+def collect_prunable_layers(
+    model: nn.Module,
+    include_conv: bool = True,
+    include_linear: bool = True,
+) -> List[str]:
+    """Collect prunable Conv2d and/or Linear layer paths."""
+    layer_paths: List[str] = []
+
+    for name, module in model.named_modules():
+        if include_conv and isinstance(module, nn.Conv2d):
+            layer_paths.append(name)
+        elif include_linear and isinstance(module, nn.Linear):
+            layer_paths.append(name)
+
+    return layer_paths
+
+
 def get_resnet_layer_info(model: nn.Module) -> Dict[str, Dict[str, Any]]:
     """
     Get detailed information for each layer in ResNet (for analysis)

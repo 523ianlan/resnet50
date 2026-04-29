@@ -1,9 +1,0 @@
-{
-  "name": "no_stab",
-  "overrides": {
-    "uncertainty_log": false,
-    "uncertainty_clip_percentile": 0.0,
-    "uncertainty_var_floor": 0.0
-  },
-  "mode": "fast"
-}

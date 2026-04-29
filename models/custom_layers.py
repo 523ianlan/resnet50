@@ -1,4 +1,4 @@
-"""ResNet custom layers - Corresponds to ViT custom_layers.py"""
+"""Prunable custom layers for convolutional and linear modules."""
 
 import torch
 import torch.nn as nn
@@ -79,7 +79,90 @@ class LowRankConv(nn.Module):
         return w_combined
 
 
-class SimpleSVDConv(nn.Module):
+class LowRankLinear(nn.Module):
+    """Low-rank linear layer composed of two Linear layers."""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        rank: int,
+        bias: bool = True,
+    ):
+        super().__init__()
+        self.linear1 = nn.Linear(in_features, rank, bias=False)
+        self.linear2 = nn.Linear(rank, out_features, bias=bias)
+        self.in_features = in_features
+        self.out_features = out_features
+        self.rank = rank
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear2(self.linear1(x))
+
+
+class _BaseSVDLayer(nn.Module):
+    """Shared utilities for SVD-based prunable layers."""
+
+    layer_kind = "generic"
+    is_bottleneck = False
+
+    def reset_fisher_accum(self):
+        self.fisher_accum.zero_()
+        self.fisher_samples = 0
+
+    def update_fisher_accum(self, gradients: torch.Tensor):
+        with torch.no_grad():
+            self.fisher_accum += gradients ** 2
+            self.fisher_samples += 1
+
+    def get_fisher_diagonal(self) -> torch.Tensor:
+        if self.fisher_samples > 0:
+            return self.fisher_accum / self.fisher_samples
+        return torch.zeros_like(self.fisher_accum)
+
+    def get_sigma(self) -> torch.Tensor:
+        if self.use_log_s:
+            return torch.exp(self.log_s)
+        return torch.clamp(self.sigma, min=self.config.svd_epsilon)
+
+    def get_score_param(self) -> torch.Tensor:
+        return self.log_s if self.use_log_s else self.sigma
+
+    def get_keep_count(self, keep_ratio: float) -> int:
+        keep_num = max(self.config.min_rank, int(self.full_rank * keep_ratio))
+        return min(keep_num, self.full_rank)
+
+    def get_uvs_for_ratio(
+        self,
+        keep_ratio: float,
+        impact_scores: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        keep_num = self.get_keep_count(keep_ratio)
+
+        if impact_scores is not None:
+            if isinstance(impact_scores, np.ndarray):
+                impact_scores = torch.from_numpy(impact_scores).to(self.get_sigma().device)
+
+            min_len = min(len(impact_scores), self.full_rank)
+            if min_len < self.full_rank:
+                impact_scores = impact_scores[:min_len]
+
+            _, top_indices = torch.topk(impact_scores, min(keep_num, min_len))
+            top_indices, _ = torch.sort(top_indices)
+        else:
+            sigma = self.get_sigma()
+            _, top_indices = torch.topk(sigma, keep_num)
+            top_indices, _ = torch.sort(top_indices)
+
+        return self.U[:, top_indices], self.get_sigma()[top_indices], self.Vh[top_indices, :]
+
+    def get_reconstruction_error(self, keep_ratio: float) -> float:
+        reconstructed = self.get_weight_for_ratio(keep_ratio)
+        error = torch.norm(reconstructed - self.original_weight) / torch.norm(self.original_weight)
+        return float(error.item())
+
+
+class SimpleSVDConv(_BaseSVDLayer):
     """
     Learnable SVD Conv layer - Corresponds to ViT SimpleSVDLinear
     
@@ -131,35 +214,9 @@ class SimpleSVDConv(nn.Module):
         # Fisher information accumulator
         self.register_buffer('fisher_accum', torch.zeros(self.full_rank))
         self.fisher_samples = 0
-        
-        self.config = config
-    
-    def reset_fisher_accum(self):
-        """Reset Fisher accumulator"""
-        self.fisher_accum.zero_()
-        self.fisher_samples = 0
-    
-    def update_fisher_accum(self, gradients: torch.Tensor):
-        """Update Fisher accumulation (gradient squared)"""
-        with torch.no_grad():
-            self.fisher_accum += gradients ** 2
-            self.fisher_samples += 1
-    
-    def get_fisher_diagonal(self) -> torch.Tensor:
-        """Get averaged Fisher diagonal (E[g^2])"""
-        if self.fisher_samples > 0:
-            return self.fisher_accum / self.fisher_samples
-        return torch.zeros_like(self.fisher_accum)
-    
-    def get_sigma(self) -> torch.Tensor:
-        """Get singular values."""
-        if self.use_log_s:
-            return torch.exp(self.log_s)
-        return torch.clamp(self.sigma, min=self.config.svd_epsilon)
 
-    def get_score_param(self) -> torch.Tensor:
-        """Return the parameter used for Fisher tracing."""
-        return self.log_s if self.use_log_s else self.sigma
+        self.config = config
+        self.layer_kind = "conv"
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass: reconstruct weights using current singular values"""
@@ -174,33 +231,7 @@ class SimpleSVDConv(nn.Module):
         impact_scores: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         '''Return selected U, S, Vh for the given keep_ratio and impact_scores.'''
-        keep_num = max(self.config.min_rank, int(self.full_rank * keep_ratio))
-        keep_num = min(keep_num, self.full_rank)
-        
-        if impact_scores is not None:
-            if isinstance(impact_scores, np.ndarray):
-                impact_scores = torch.from_numpy(impact_scores).to(self.get_sigma().device)
-            
-            min_len = min(len(impact_scores), self.full_rank)
-            if min_len < self.full_rank:
-                impact_scores = impact_scores[:min_len]
-            
-            _, top_indices = torch.topk(impact_scores, min(keep_num, min_len))
-            top_indices, _ = torch.sort(top_indices)
-            
-            U_selected = self.U[:, top_indices]
-            S_selected = self.get_sigma()[top_indices]
-            Vh_selected = self.Vh[top_indices, :]
-        else:
-            S = self.get_sigma()
-            _, top_indices = torch.topk(S, keep_num)
-            top_indices, _ = torch.sort(top_indices)
-            
-            U_selected = self.U[:, top_indices]
-            S_selected = S[top_indices]
-            Vh_selected = self.Vh[top_indices, :]
-        
-        return U_selected, S_selected, Vh_selected
+        return _BaseSVDLayer.get_uvs_for_ratio(self, keep_ratio, impact_scores)
 
     def get_weight_for_ratio(
         self,
@@ -215,7 +246,83 @@ class SimpleSVDConv(nn.Module):
         return W_flat.view(self.cout, self.cin, self.kh, self.kw)
 
     def get_reconstruction_error(self, keep_ratio: float) -> float:
-        """Calculate reconstruction error"""
-        W_recon = self.get_weight_for_ratio(keep_ratio)
-        error = torch.norm(W_recon - self.original_weight) / torch.norm(self.original_weight)
-        return float(error.item())
+        return _BaseSVDLayer.get_reconstruction_error(self, keep_ratio)
+
+    def get_original_param_count(self) -> int:
+        params = self.cout * self.cin * self.kh * self.kw
+        if self.bias is not None:
+            params += self.cout
+        return params
+
+    def get_pruned_param_count(self, rank: int) -> int:
+        params = (self.cin * self.kh * self.kw * rank) + (self.cout * rank)
+        if self.bias is not None:
+            params += self.cout
+        return params
+
+
+class SimpleSVDLinear(_BaseSVDLayer):
+    """Learnable SVD Linear layer for FC/MLP pruning."""
+
+    def __init__(
+        self,
+        original_linear: nn.Linear,
+        layer_name: str,
+        config=None
+    ):
+        super().__init__()
+        if config is None:
+            from configs.config import PruningConfig
+            config = PruningConfig()
+
+        w = original_linear.weight.data
+        self.out_features, self.in_features = w.shape
+        self.layer_name = layer_name
+        self.is_bottleneck = False
+        self.bias = original_linear.bias
+
+        U, S, Vh = torch.linalg.svd(w, full_matrices=False)
+        self.full_rank = len(S)
+        self.use_log_s = bool(getattr(config, "use_log_s", True))
+        if self.use_log_s:
+            self.log_s = nn.Parameter(torch.log(S + config.svd_epsilon))
+            self.sigma = None
+        else:
+            self.sigma = nn.Parameter(S.clone())
+            self.log_s = None
+
+        self.register_buffer('U', U[:, :self.full_rank])
+        self.register_buffer('Vh', Vh[:self.full_rank, :])
+        self.register_buffer('original_weight', w.clone())
+        self.register_buffer('fisher_accum', torch.zeros(self.full_rank))
+        self.fisher_samples = 0
+
+        self.config = config
+        self.layer_kind = "linear"
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        sigma = self.get_sigma()
+        weight = self.U @ torch.diag(sigma) @ self.Vh
+        return F.linear(x, weight, self.bias)
+
+    def get_weight_for_ratio(
+        self,
+        keep_ratio: float,
+        impact_scores: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        U_selected, S_selected, Vh_selected = self.get_uvs_for_ratio(
+            keep_ratio, impact_scores
+        )
+        return U_selected @ torch.diag(S_selected) @ Vh_selected
+
+    def get_original_param_count(self) -> int:
+        params = self.out_features * self.in_features
+        if self.bias is not None:
+            params += self.out_features
+        return params
+
+    def get_pruned_param_count(self, rank: int) -> int:
+        params = (self.in_features * rank) + (self.out_features * rank)
+        if self.bias is not None:
+            params += self.out_features
+        return params

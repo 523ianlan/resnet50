@@ -1,9 +1,0 @@
-{
-  "name": "uniform",
-  "overrides": {
-    "target_compression": 0.6,
-    "uncertainty_alpha": 0.0,
-    "allocation_strategy": "binary_search",
-    "stage2_score_metric": "fisher"
-  }
-}

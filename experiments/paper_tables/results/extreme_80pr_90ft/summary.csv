@@ -1,4 +1,0 @@
-name,target_compression,fine_tune_epochs,uncertainty_alpha,allocation_strategy,stage2_score_metric,use_fisher_scores,report_path,final_top1,final_accuracy_change,achieved_compression,uncertainty_log,uncertainty_clip_percentile,uncertainty_var_floor
-global_fisher,80.0,90,1.0,global_fisher,fisher,True,./experiments/paper_tables/results/extreme_80pr_90ft\global_fisher\r50_80pr_90ft\complete_pruning_report.txt,71.68,-4.42,80.0,,,
-mc_dropout_raw_norm,80.0,90,1.0,binary_search,fisher,True,./experiments/paper_tables/results/extreme_80pr_90ft\mc_dropout_raw_norm\r50_80pr_90ft\complete_pruning_report.txt,71.17,-4.93,80.0,False,0.0,0.0
-mc_dropout_full,80.0,90,1.0,binary_search,fisher,True,./experiments/paper_tables/results/extreme_80pr_90ft\mc_dropout_full\r50_80pr_90ft\complete_pruning_report.txt,71.06,-5.04,80.0,True,0.0,1e-06

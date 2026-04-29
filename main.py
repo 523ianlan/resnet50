@@ -5,22 +5,23 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 import argparse
 import random
+import copy
 import torch
 import torch.nn as nn
 import numpy as np
 import time
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from configs.config import PruningConfig
 from data.build import get_resnet_data_loaders_with_calib
-from models.resnet_setup import setup_resnet_model
-from models.custom_layers import SimpleSVDConv
-from models.utils import collect_resnet_conv_layers, get_resnet_parent_and_name
+from models.resnet_setup import get_model_family, setup_builtin_model, setup_resnet_model
+from models.custom_layers import SimpleSVDConv, SimpleSVDLinear
+from models.utils import collect_prunable_layers, get_resnet_parent_and_name
 from pruning.stage1_uncertainty import compute_uncertainty_stage1_r50
 from pruning.stage2_fisher import compute_fisher_impact_stage2_r50
 from pruning.allocation import allocate_pruning_binary_search_r50
-from pruning.core import replace_resnet_conv_layer
+from pruning.core import replace_prunable_layer
 from utils.engine import fine_tune_resnet_improved
 from utils.metrics import evaluate_with_topk_r50, compute_flops_resnet
 from utils.visualization import (
@@ -57,7 +58,179 @@ def build_custom_tag(config: PruningConfig) -> str:
     return "_".join(parts)
 
 
-def main_r50(config: Optional[PruningConfig] = None):
+def build_pruning_config(
+    pruning_ratio: float,
+    fine_tune_epochs: int,
+    base_config: Optional[PruningConfig] = None,
+    **overrides: Any,
+) -> PruningConfig:
+    """
+    Build a pruning config for programmatic use.
+
+    Args:
+        pruning_ratio: Target pruning/compression ratio in [0, 1).
+        fine_tune_epochs: Number of fine-tuning epochs.
+        base_config: Optional existing config to reuse.
+        **overrides: Any extra config fields to override.
+
+    Returns:
+        A configured PruningConfig instance.
+    """
+    if not 0.0 <= pruning_ratio < 1.0:
+        raise ValueError("pruning_ratio must be in the range [0.0, 1.0).")
+    if fine_tune_epochs < 0:
+        raise ValueError("fine_tune_epochs must be >= 0.")
+
+    config = base_config if base_config is not None else PruningConfig()
+    config.target_compression = pruning_ratio
+    config.fine_tune_epochs = fine_tune_epochs
+
+    for key, value in overrides.items():
+        if hasattr(config, key):
+            setattr(config, key, value)
+        else:
+            raise AttributeError(f"Unknown config field: {key}")
+
+    config._compression_percentage = int(config.target_compression * 100)
+    return config
+
+
+def _detect_model_family(model: nn.Module) -> str:
+    has_conv = any(isinstance(module, nn.Conv2d) for module in model.modules())
+    has_linear = any(isinstance(module, nn.Linear) for module in model.modules())
+
+    if has_conv:
+        return "cnn"
+    if has_linear:
+        return "mlp"
+    raise ValueError("The provided model has no prunable Conv2d or Linear layers.")
+
+
+def _prepare_runtime(
+    config: PruningConfig,
+    model: Optional[nn.Module] = None,
+    train_loader=None,
+    val_loader=None,
+    calib_loader=None,
+    model_family: Optional[str] = None,
+):
+    if model is None:
+        built_in_model_name = getattr(config, "model_name", "resnet50")
+        print(f"\n1. Loading built-in model: {built_in_model_name}")
+        model, data_config, family = setup_builtin_model(
+            config,
+            model_name=built_in_model_name,
+            pretrained=bool(getattr(config, "pretrained", True)),
+        )
+        print("\n2. Preparing data")
+        train_loader, val_loader, calib_loader = get_resnet_data_loaders_with_calib(config)
+        if calib_loader is None:
+            print("Calibration loader not specified; using train_loader as D_cal.")
+            calib_loader = train_loader
+        else:
+            print(f"Calibration loader ready: {len(calib_loader)} batches")
+        model_name = built_in_model_name
+        model_builder = lambda: setup_builtin_model(
+            config,
+            model_name=built_in_model_name,
+            pretrained=bool(getattr(config, "pretrained", True)),
+        )[0]
+        return model, train_loader, val_loader, calib_loader, family, model_name, model_builder
+
+    if train_loader is None or val_loader is None:
+        raise ValueError("When passing a custom model, train_loader and val_loader are required.")
+
+    family = model_family or _detect_model_family(model)
+    model_name = model.__class__.__name__
+    if calib_loader is None:
+        calib_loader = train_loader
+        print("Calibration loader not provided; using train_loader as D_cal.")
+    base_model = copy.deepcopy(model).to(config.device)
+    working_model = copy.deepcopy(base_model).to(config.device)
+    model_builder = lambda: copy.deepcopy(base_model).to(config.device)
+    return working_model, train_loader, val_loader, calib_loader, family, model_name, model_builder
+
+
+def _build_svd_layers(model: nn.Module, config: PruningConfig, model_family: str):
+    include_conv = model_family == "cnn"
+    include_linear = True
+    layer_paths = collect_prunable_layers(model, include_conv=include_conv, include_linear=include_linear)
+    svd_layers = {}
+
+    for path in layer_paths:
+        parent, layer_name = get_resnet_parent_and_name(model, path)
+        if parent is None or layer_name is None:
+            continue
+
+        original_layer = getattr(parent, layer_name, None)
+        if original_layer is None and hasattr(parent, '_modules') and layer_name in parent._modules:
+            original_layer = parent._modules[layer_name]
+
+        if isinstance(original_layer, nn.Conv2d):
+            svd_layer = SimpleSVDConv(original_layer, path, config=config).to(config.device)
+        elif isinstance(original_layer, nn.Linear):
+            svd_layer = SimpleSVDLinear(original_layer, path, config=config).to(config.device)
+        else:
+            continue
+
+        if hasattr(parent, layer_name):
+            setattr(parent, layer_name, svd_layer)
+        elif hasattr(parent, '_modules') and layer_name in parent._modules:
+            parent._modules[layer_name] = svd_layer
+        svd_layers[path] = svd_layer
+
+    return layer_paths, svd_layers
+
+
+def _safe_compute_flops(model: nn.Module, config: PruningConfig):
+    try:
+        return compute_flops_resnet(model)
+    except Exception:
+        return None
+
+
+def _build_pruning_detail(svd_layer, keep_ratio: float, pruned_rank: int, used_fisher_selection: bool):
+    detail = {
+        'layer_kind': getattr(svd_layer, 'layer_kind', 'conv'),
+        'is_bottleneck': getattr(svd_layer, 'is_bottleneck', False),
+        'keep_ratio': keep_ratio,
+        'pruned_rank': pruned_rank,
+        'original_rank': svd_layer.full_rank,
+        'recon_error': svd_layer.get_reconstruction_error(keep_ratio),
+        'has_bias': svd_layer.bias is not None,
+        'used_fisher_selection': used_fisher_selection,
+    }
+    if getattr(svd_layer, 'layer_kind', 'conv') == 'conv':
+        detail.update({
+            'original_cin': svd_layer.cin,
+            'original_cout': svd_layer.cout,
+            'kernel_size': (svd_layer.kh, svd_layer.kw),
+        })
+    else:
+        detail.update({
+            'original_in_features': svd_layer.in_features,
+            'original_out_features': svd_layer.out_features,
+        })
+    return detail
+
+
+def _parse_int_list(value: Optional[str]):
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    return [int(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def main_r50(
+    config: Optional[PruningConfig] = None,
+    model: Optional[nn.Module] = None,
+    train_loader=None,
+    val_loader=None,
+    calib_loader=None,
+    model_family: Optional[str] = None,
+):
     """
     Main pruning flow for ResNet-50
     
@@ -67,12 +240,8 @@ def main_r50(config: Optional[PruningConfig] = None):
     if config is None:
         config = PruningConfig()
     
-    # Update experiment name
-    config.experiment_name = f"ResNet50_SecondOrderPruning_{int(config.target_compression*100)}pr"
-    
     print("=" * 80)
-    print("RESNET-50 SECOND-ORDER IMPACT PRUNING")
-    print("Model: ResNet-50 trained on ImageNet-1k (~76.1% top-1)")
+    print("SECOND-ORDER IMPACT PRUNING")
     print("=" * 80)
     
     # Create save directory
@@ -114,68 +283,109 @@ def main_r50(config: Optional[PruningConfig] = None):
         except Exception:
             pass
     
-    # ========== 1. Load Model ==========
-    print("\n1. Loading ResNet-50 model")
-    model, data_config = setup_resnet_model(config)
+    # ========== 1-2. Load Model / Prepare Data ==========
+    model, train_loader, val_loader, calib_loader, resolved_family, model_name, model_builder = _prepare_runtime(
+        config=config,
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        calib_loader=calib_loader,
+        model_family=model_family,
+    )
     model.eval()
-    
-    # ========== 2. Prepare Data ==========
-    print("\n2. Preparing data")
-    train_loader, val_loader, calib_loader = get_resnet_data_loaders_with_calib(config)
-    if calib_loader is None:
-        print("Calibration loader not specified; using train_loader as D_cal.")
-        calib_loader = train_loader
+    model_name_lower = model_name.lower()
+    if model_name_lower == "resnet18":
+        config.model_prefix = "r18"
+    elif model_name_lower == "resnet34":
+        config.model_prefix = "r34"
+    elif model_name_lower == "resnet50":
+        config.model_prefix = "r50"
     else:
-        print(f"Calibration loader ready: {len(calib_loader)} batches")
+        config.model_prefix = resolved_family
+    config.experiment_name = f"{model_name}_SecondOrderPruning_{int(config.target_compression*100)}pr"
+    print(f"Model: {model_name} | Family: {resolved_family}")
     
     # ========== 3. Evaluate Original Model ==========
-    print("\n3. Evaluating original ResNet-50 model")
+    print("\n3. Evaluating original model")
     orig_top1, orig_top5 = evaluate_with_topk_r50(model, val_loader, config=config)
     orig_params = sum(p.numel() for p in model.parameters())
-    orig_flops = compute_flops_resnet(model)
+    orig_flops = _safe_compute_flops(model, config)
     
-    print(f"\nResNet-50 Results:")
+    print(f"\nOriginal Model Results:")
     print(f"  Top-1 Accuracy: {orig_top1:.2f}%")
     print(f"  Top-5 Accuracy: {orig_top5:.2f}%")
     print(f"  Parameters: {orig_params/1e6:.2f}M")
     if orig_flops:
         print(f"  FLOPs: {orig_flops/1e9:.2f}G")
+
+    if config.target_compression <= 0.0:
+        print("\nTarget compression is 0. Skipping pruning and fine-tuning to preserve the true baseline.")
+
+        config_dict = config.to_dict()
+        config_dict.update({'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')})
+
+        ModelStructureManager.save_complete_model(
+            model, {}, {}, {},
+            before_finetune_path,
+            {'top1': orig_top1, 'top5': orig_top5},
+            {'top1': orig_top1, 'top5': orig_top5},
+            test_accuracy={'top1': orig_top1, 'top5': orig_top5},
+            config=config_dict
+        )
+
+        generate_report(
+            save_dir=save_dir,
+            config=config,
+            model=model,
+            svd_layers={},
+            layer_importance_stage1={},
+            component_impact_scores={},
+            keep_ratios={},
+            pruning_details={},
+            orig_params=orig_params,
+            pruned_params=orig_params,
+            orig_top1=orig_top1, orig_top5=orig_top5,
+            pruned_top1=orig_top1, pruned_top5=orig_top5,
+            final_top1=orig_top1, final_top5=orig_top5,
+            orig_flops=orig_flops,
+            pruned_flops=orig_flops,
+            history=None
+        )
+
+        result = {
+            "final_model": model,
+            "pruned_model": model,
+            "pruning_details": {},
+            "keep_ratios": {},
+            "layer_importance_stage1": {},
+            "component_impact_scores": {},
+            "history": None,
+            "metrics": {
+                "orig_top1": orig_top1,
+                "orig_top5": orig_top5,
+                "pruned_top1": orig_top1,
+                "pruned_top5": orig_top5,
+                "final_top1": orig_top1,
+                "final_top5": orig_top5,
+                "orig_params": orig_params,
+                "pruned_params": orig_params,
+                "orig_flops": orig_flops,
+                "pruned_flops": orig_flops,
+            },
+            "paths": {
+                "save_dir": save_dir,
+                "before_finetune_path": before_finetune_path,
+                "finetuned_path": before_finetune_path,
+            },
+            "config": config,
+        }
+        return result
     
-    # ========== 4. Collect Conv Layers ==========
-    print("\n4. Collecting convolutional layers for pruning")
-    conv_paths = collect_resnet_conv_layers(model)
-    print(f"Found {len(conv_paths)} convolutional layers")
-    
-    # ========== 5. Replace with SVD Layers ==========
-    print("\n5. Replacing convolutional layers with SVD layers")
-    svd_layers = {}
-    
-    for path in conv_paths:
-        parent, layer_name = get_resnet_parent_and_name(model, path)
-        if parent is None:
-            continue
-        
-        # Get original conv layer
-        original_conv = None
-        if hasattr(parent, layer_name):
-            original_conv = getattr(parent, layer_name)
-        elif hasattr(parent, '_modules') and layer_name in parent._modules:
-            original_conv = parent._modules[layer_name]
-        
-        if original_conv is None or not isinstance(original_conv, nn.Conv2d):
-            continue
-        
-        # Create SVD layer
-        svd_conv = SimpleSVDConv(original_conv, path, config=config).to(config.device)
-        
-        # Replace layer in model
-        if hasattr(parent, layer_name):
-            setattr(parent, layer_name, svd_conv)
-        elif hasattr(parent, '_modules') and layer_name in parent._modules:
-            parent._modules[layer_name] = svd_conv
-        
-        svd_layers[path] = svd_conv
-    
+    # ========== 4-5. Collect Layers / Replace with SVD Layers ==========
+    print("\n4. Collecting prunable layers")
+    layer_paths, svd_layers = _build_svd_layers(model, config, resolved_family)
+    print(f"Found {len(layer_paths)} prunable layers")
+    print("\n5. Replacing prunable layers with SVD layers")
     print(f"Created {len(svd_layers)} SVD layers")
     
     # ========== 6. Two-Stage Pruning Allocation ==========
@@ -281,10 +491,10 @@ def main_r50(config: Optional[PruningConfig] = None):
     )
     
     # ========== 7. Execute Pruning ==========
-    print("\n7. Executing pruning on ResNet-50")
+    print("\n7. Executing pruning")
     
     # Reload original model for pruning
-    pruned_model, _ = setup_resnet_model(config)
+    pruned_model = model_builder()
     pruned_model.eval()
     
     pruning_details = {}
@@ -297,8 +507,7 @@ def main_r50(config: Optional[PruningConfig] = None):
         keep_ratio = keep_ratios[name]
         layer_impact_scores = component_impact_scores.get(name, None)
         
-        # Execute replacement: Conv2d -> LowRankConv
-        pruned_rank = replace_resnet_conv_layer(
+        pruned_rank = replace_prunable_layer(
             pruned_model, name, svd_layer, keep_ratio,
             impact_scores=layer_impact_scores,
             config=config
@@ -306,29 +515,19 @@ def main_r50(config: Optional[PruningConfig] = None):
         
         if pruned_rank is not None:
             pruned_count += 1
-            recon_error = svd_layer.get_reconstruction_error(keep_ratio)
-            pruning_details[name] = {
-                'is_bottleneck': svd_layer.is_bottleneck,
-                'keep_ratio': keep_ratio,
-                'pruned_rank': pruned_rank,
-                'original_rank': svd_layer.full_rank,
-                'recon_error': recon_error,
-                'original_cin': svd_layer.cin,
-                'original_cout': svd_layer.cout,
-                'kernel_size': (svd_layer.kh, svd_layer.kw),
-                'has_bias': svd_layer.bias is not None,
-                'used_fisher_selection': layer_impact_scores is not None
-            }
+            pruning_details[name] = _build_pruning_detail(
+                svd_layer, keep_ratio, pruned_rank, used_fisher_selection=layer_impact_scores is not None
+            )
     
     print(f"\nSuccessfully pruned {pruned_count}/{len(keep_ratios)} layers")
     
     # ========== 8. Evaluate Pruned Model ==========
-    print("\n8. Evaluating pruned ResNet-50 model (before fine-tuning)")
+    print("\n8. Evaluating pruned model (before fine-tuning)")
     pruned_top1, pruned_top5 = evaluate_with_topk_r50(pruned_model, val_loader, config=config)
     pruned_params = sum(p.numel() for p in pruned_model.parameters())
     
     # ========== 9. Save Model (Before FT) ==========
-    print("\n9. Saving pruned ResNet-50 model (Before FT)")
+    print("\n9. Saving pruned model (Before FT)")
     config_dict = config.to_dict()
     config_dict.update({'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')})
     
@@ -342,23 +541,23 @@ def main_r50(config: Optional[PruningConfig] = None):
     
     # ========== Results Summary ==========
     print("\n" + "="*80)
-    print("RESNET-50 RESULTS SUMMARY (BEFORE FINE-TUNING)")
+    print("RESULTS SUMMARY (BEFORE FINE-TUNING)")
     print("="*80)
     
     param_reduction = 100 * (1 - pruned_params / orig_params)
     top1_change = pruned_top1 - orig_top1
     top5_change = pruned_top5 - orig_top5
     
-    print(f"\nOriginal ResNet-50 Model:")
+    print(f"\nOriginal Model:")
     print(f"  Parameters: {orig_params/1e6:.2f}M")
     if orig_flops:
         print(f"  FLOPs: {orig_flops/1e9:.2f}G")
     print(f"  Top-1 Accuracy: {orig_top1:.2f}%")
     print(f"  Top-5 Accuracy: {orig_top5:.2f}%")
     
-    print(f"\nPruned ResNet-50 Model (Before Fine-tuning):")
+    print(f"\nPruned Model (Before Fine-tuning):")
     print(f"  Parameters: {pruned_params/1e6:.2f}M ({param_reduction:.1f}% reduction)")
-    pruned_flops = compute_flops_resnet(pruned_model)
+    pruned_flops = _safe_compute_flops(pruned_model, config)
     if pruned_flops and orig_flops:
         flops_reduction = 100 * (1 - pruned_flops / orig_flops)
         print(f"  FLOPs: {pruned_flops/1e9:.2f}G ({flops_reduction:.1f}% reduction)")
@@ -376,7 +575,7 @@ def main_r50(config: Optional[PruningConfig] = None):
     print(f"\n  Avg keep ratio (all layers): {avg_keep:.2%}")
     
     # ========== 10. Fine-tuning ==========
-    print("\n10. Starting fine-tuning for ResNet-50")
+    print("\n10. Starting fine-tuning")
     
     final_model = pruned_model
     final_top1, final_top5 = pruned_top1, pruned_top5
@@ -432,7 +631,93 @@ def main_r50(config: Optional[PruningConfig] = None):
         batch_clean_experiment(ft_dir, overwrite=True)
     else:
         print('ft_dir cleaning: skipped (directory not found)')
-    return pruned_model, pruning_details
+    result = {
+        "final_model": final_model,
+        "pruned_model": pruned_model,
+        "pruning_details": pruning_details,
+        "keep_ratios": keep_ratios,
+        "layer_importance_stage1": layer_importance_stage1,
+        "component_impact_scores": component_impact_scores,
+        "history": fine_tune_history,
+        "metrics": {
+            "orig_top1": orig_top1,
+            "orig_top5": orig_top5,
+            "pruned_top1": pruned_top1,
+            "pruned_top5": pruned_top5,
+            "final_top1": final_top1,
+            "final_top5": final_top5,
+            "orig_params": orig_params,
+            "pruned_params": pruned_params,
+            "orig_flops": orig_flops,
+            "pruned_flops": pruned_flops,
+        },
+        "paths": {
+            "save_dir": save_dir,
+            "before_finetune_path": before_finetune_path,
+            "finetuned_path": finetuned_path,
+        },
+        "config": config,
+    }
+    return result
+
+
+def prune_and_finetune_model(
+    pruning_ratio: float,
+    fine_tune_epochs: int,
+    model_type: Optional[str] = None,
+    model: Optional[nn.Module] = None,
+    train_loader=None,
+    val_loader=None,
+    calib_loader=None,
+    config: Optional[PruningConfig] = None,
+    **config_overrides: Any,
+) -> Dict[str, Any]:
+    """
+    Unified entry point for the pruning pipeline.
+
+    Args:
+        model_type: Optional model family name such as cnn, resnet50, mlp.
+        pruning_ratio: Target pruning/compression ratio.
+        fine_tune_epochs: Number of fine-tuning epochs after pruning.
+        model: Optional custom model instance. If omitted, ResNet-50 is loaded.
+        train_loader: Required when model is provided.
+        val_loader: Required when model is provided.
+        calib_loader: Optional calibration loader. Defaults to train_loader.
+        config: Optional base config.
+        **config_overrides: Extra config fields such as save_dir, device, batch_size.
+
+    Returns:
+        A result dict containing the final model and experiment metadata.
+    """
+    normalized_model_type = model_type.strip().lower() if model_type is not None else None
+    runtime_config = build_pruning_config(
+        pruning_ratio=pruning_ratio,
+        fine_tune_epochs=fine_tune_epochs,
+        base_config=config,
+        **config_overrides,
+    )
+
+    if model is not None:
+        detected_family = normalized_model_type or _detect_model_family(model)
+        if detected_family not in {"cnn", "resnet", "resnet50", "mlp"}:
+            raise ValueError(f"Unsupported custom model family: {detected_family}")
+        family = "cnn" if detected_family in {"cnn", "resnet", "resnet50"} else "mlp"
+        return main_r50(
+            runtime_config,
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            calib_loader=calib_loader,
+            model_family=family,
+        )
+
+    if normalized_model_type in {None, "cnn", "resnet", "resnet50", "mlp"}:
+        return main_r50(runtime_config)
+
+    raise ValueError(
+        f"Unsupported model_type: {model_type}. "
+        "Use one of: 'cnn', 'resnet', 'resnet50', 'mlp'."
+    )
 
 
 def main():
@@ -448,6 +733,13 @@ def main():
     # ==================== Basic Settings ====================
     parser.add_argument('--experiment-name', type=str, default=None,
                         help='Experiment name')
+    parser.add_argument('--model-name', type=str, default=None,
+                        help='Built-in model name: resnet18, resnet34, resnet50, simple_cnn, mlp_small, mlp_medium')
+    parser.add_argument('--pretrained', action='store_true', default=None,
+                        help='Use pretrained weights when available')
+    parser.add_argument('--no-pretrained', action='store_false', default=None,
+                        dest='pretrained',
+                        help='Disable pretrained weights')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed')
     parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default=None,
@@ -488,6 +780,28 @@ def main():
                         help='Enable data/compute time profiling')
     parser.add_argument('--profile-interval', type=int, default=None,
                         help='Profiling interval in batches')
+    parser.add_argument('--shuffle-val', action='store_true', default=None,
+                        help='Shuffle validation loader')
+    parser.add_argument('--no-shuffle-val', action='store_false', default=None,
+                        dest='shuffle_val',
+                        help='Disable validation loader shuffling')
+    parser.add_argument('--random-eval-subset', action='store_true', default=None,
+                        help='Use a random validation subset when eval-max-batches > 0')
+    parser.add_argument('--no-random-eval-subset', action='store_false', default=None,
+                        dest='random_eval_subset',
+                        help='Disable random validation subset sampling')
+    parser.add_argument('--input-channels', type=int, default=None,
+                        help='Model input channels for built-in toy models')
+    parser.add_argument('--input-height', type=int, default=None,
+                        help='Model input height for built-in toy models')
+    parser.add_argument('--input-width', type=int, default=None,
+                        help='Model input width for built-in toy models')
+    parser.add_argument('--num-classes', type=int, default=None,
+                        help='Number of output classes for built-in toy models')
+    parser.add_argument('--mlp-hidden-dims', type=str, default=None,
+                        help='Comma-separated hidden dims for mlp_medium, e.g. 1024,512')
+    parser.add_argument('--cnn-channels', type=str, default=None,
+                        help='Comma-separated channel sizes for simple_cnn, e.g. 32,64,128')
     
     # ==================== Pruning Core Parameters ====================
     parser.add_argument('--target-compression', type=float, default=None,
@@ -551,6 +865,14 @@ def main():
                         help='Minimum pruning ratio clip (default: 0.05)')
     parser.add_argument('--pruning-clip-high', type=float, default=None,
                         help='Maximum pruning ratio clip (default: 0.95)')
+    parser.add_argument('--binary-search-iterations', type=int, default=None,
+                        help='Number of binary-search iterations for global budget allocation')
+    parser.add_argument('--binary-search-low', type=float, default=None,
+                        help='Lower bound of binary-search scale')
+    parser.add_argument('--binary-search-high', type=float, default=None,
+                        help='Upper bound of binary-search scale')
+    parser.add_argument('--binary-search-tolerance', type=float, default=None,
+                        help='Convergence tolerance of binary-search allocation')
     
     # ==================== Fine-tuning Parameters ====================
     parser.add_argument('--fine-tune-epochs', type=int, default=None,
@@ -606,6 +928,14 @@ def main():
     for key, value in vars(args).items():
         if value is not None and hasattr(config, key):
             setattr(config, key, value)
+
+    parsed_mlp_hidden_dims = _parse_int_list(args.mlp_hidden_dims)
+    if parsed_mlp_hidden_dims is not None:
+        config.mlp_hidden_dims = parsed_mlp_hidden_dims
+
+    parsed_cnn_channels = _parse_int_list(args.cnn_channels)
+    if parsed_cnn_channels is not None:
+        config.cnn_channels = parsed_cnn_channels
     
     # Special handling for boolean flags
     if args.use_mixup is not None:
@@ -633,7 +963,12 @@ def main():
             print(f"{key:30}: {value}")
     print("="*60 + "\n")
     
-    main_r50(config)
+    prune_and_finetune_model(
+        model_type=get_model_family(getattr(config, "model_name", "resnet50")),
+        pruning_ratio=config.target_compression,
+        fine_tune_epochs=config.fine_tune_epochs,
+        config=config,
+    )
 
 
 if __name__ == '__main__':

@@ -1,2 +1,0 @@
-layer,full_rank,proxy_corr_spearman,proxy_corr_pearson,intrinsic_robustness,integrated_eff_svd
-conv1,64,nan,nan,0.0,0.0

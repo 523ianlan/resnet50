@@ -1,7 +1,0 @@
-{
-  "name": "alpha_0",
-  "overrides": {
-    "uncertainty_alpha": 0.0
-  },
-  "mode": "fast"
-}

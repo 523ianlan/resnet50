@@ -1,9 +1,0 @@
-{
-  "name": "magnitude",
-  "overrides": {
-    "target_compression": 0.6,
-    "uncertainty_alpha": 0.0,
-    "use_fisher_scores": false,
-    "stage2_score_metric": "magnitude"
-  }
-}

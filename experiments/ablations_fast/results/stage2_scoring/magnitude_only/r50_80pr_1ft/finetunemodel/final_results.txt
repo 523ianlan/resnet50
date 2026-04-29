@@ -1,2 +1,0 @@
-Best Top-1: 38.74% at epoch 1
-Final Test Top-1: 45.19%

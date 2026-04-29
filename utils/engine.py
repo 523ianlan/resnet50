@@ -216,7 +216,8 @@ def train_one_epoch_r50(
         _, top1_p = outputs.max(1)
         top1_correct += (top1_p == labels).sum().item()
         
-        _, top5_p = outputs.topk(5, 1, True, True)
+        topk = min(5, outputs.size(1))
+        _, top5_p = outputs.topk(topk, 1, True, True)
         top5_correct += (top5_p == labels.view(-1, 1)).any(dim=1).sum().item()
         
         total += bs
@@ -284,7 +285,8 @@ def validate_one_epoch_r50(
             _, top1_p = outputs.max(1)
             top1_correct += (top1_p == labels).sum().to(torch.float64)
 
-            _, top5_p = outputs.topk(5, 1, True, True)
+            topk = min(5, outputs.size(1))
+            _, top5_p = outputs.topk(topk, 1, True, True)
             top5_correct += (top5_p == labels.view(-1, 1)).any(dim=1).sum().to(torch.float64)
 
     final_loss = (val_loss / total_samples).item()

@@ -21,15 +21,10 @@ def allocate_pruning_binary_search_r50(
     total_prunable_params = 0
     min_prunable_params = 0
     for layer in svd_layers.values():
-        total_prunable_params += layer.cout * layer.cin * layer.kh * layer.kw
-        if layer.bias is not None:
-            total_prunable_params += layer.cout
+        total_prunable_params += layer.get_original_param_count()
 
         rank_min = min(config.min_rank, layer.full_rank)
-        min_layer_params = (layer.cin * layer.kh * layer.kw * rank_min) + (layer.cout * rank_min)
-        if layer.bias is not None:
-            min_layer_params += layer.cout
-        min_prunable_params += min_layer_params
+        min_prunable_params += layer.get_pruned_param_count(rank_min)
 
     fixed_params = 0
     if total_model_params is not None:
@@ -71,11 +66,9 @@ def allocate_pruning_binary_search_r50(
             )
 
             keep_ratio = 1.0 - pruning_ratio
-            rank = int(layer.full_rank * keep_ratio)
-            rank = max(config.min_rank, rank)
-            rank = min(rank, layer.full_rank)
-
-            layer_params = (layer.cin * layer.kh * layer.kw * rank) +                            (layer.cout * rank) +                            (layer.cout if layer.bias is not None else 0)
+            rank = layer.get_keep_count(keep_ratio)
+            keep_ratio = rank / layer.full_rank
+            layer_params = layer.get_pruned_param_count(rank)
 
             current_total_params += layer_params
             temp_keep_ratios[name] = keep_ratio
@@ -113,14 +106,13 @@ def allocate_pruning_binary_search_r50(
     for name in svd_layers:
         imp = layer_importance_stage1.get(name, 0)
         kr = final_keep_ratios[name]
-        rank = int(svd_layers[name].full_rank * kr)
-        rank = max(config.min_rank, rank)
-        rank = min(rank, svd_layers[name].full_rank)
+        rank = svd_layers[name].get_keep_count(kr)
+        kr = rank / svd_layers[name].full_rank
 
         full_rank = svd_layers[name].full_rank
         print(f"{name.split('.')[-1]:<35} {imp:.4f}      {kr:.2%}      {rank}/{full_rank}")
 
-        final_params += (svd_layers[name].cin * svd_layers[name].kh * svd_layers[name].kw * rank) +                         (svd_layers[name].cout * rank) +                         (svd_layers[name].cout if svd_layers[name].bias is not None else 0)
+        final_params += svd_layers[name].get_pruned_param_count(rank)
 
     if total_model_params is not None:
         final_total_params = final_params + fixed_params

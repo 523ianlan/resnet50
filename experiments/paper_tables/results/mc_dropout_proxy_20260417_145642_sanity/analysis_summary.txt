@@ -1,9 +1,0 @@
-MC-Dropout Proxy Analysis Summary
-================================================================================
-Save dir: d:\UFALP\resnet50\experiments\paper_tables\results\mc_dropout_proxy_20260417_145642_sanity
-Selected layers: 1
-Baseline loss: 0.516783
-Baseline top1: 84.3750
-Cross-layer Spearman(mean U, mean D_rand): nan
-JSON report: d:\UFALP\resnet50\experiments\paper_tables\results\mc_dropout_proxy_20260417_145642_sanity\mc_dropout_proxy_report.json
-CSV summary: d:\UFALP\resnet50\experiments\paper_tables\results\mc_dropout_proxy_20260417_145642_sanity\layer_summary.csv

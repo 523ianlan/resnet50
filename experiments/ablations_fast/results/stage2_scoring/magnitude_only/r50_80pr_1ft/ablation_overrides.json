@@ -1,9 +1,0 @@
-{
-  "name": "magnitude_only",
-  "overrides": {
-    "use_fisher_scores": false,
-    "fisher_first_order_weight": 0.0,
-    "fisher_second_order_weight": 0.0
-  },
-  "mode": "fast"
-}

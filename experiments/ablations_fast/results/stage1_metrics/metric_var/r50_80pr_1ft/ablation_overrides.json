@@ -1,7 +1,0 @@
-{
-  "name": "metric_var",
-  "overrides": {
-    "uncertainty_metric": "var"
-  },
-  "mode": "fast"
-}

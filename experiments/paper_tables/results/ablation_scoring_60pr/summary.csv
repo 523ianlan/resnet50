@@ -1,6 +1,0 @@
-name,target_compression,uncertainty_alpha,use_fisher_scores,stage2_score_metric,report_path,final_top1,final_accuracy_change,achieved_compression
-magnitude,60.0,0.0,False,magnitude,./experiments/paper_tables/results/ablation_scoring_60pr\magnitude\r50_60pr_10ft\complete_pruning_report.txt,73.52,-2.58,59.9
-energy,60.0,0.0,False,energy,./experiments/paper_tables/results/ablation_scoring_60pr\energy\r50_60pr_10ft\complete_pruning_report.txt,73.52,-2.58,59.9
-taylor,60.0,0.0,True,taylor,./experiments/paper_tables/results/ablation_scoring_60pr\taylor\r50_60pr_10ft\complete_pruning_report.txt,72.79,-3.31,59.9
-hessian,60.0,0.0,True,hessian,./experiments/paper_tables/results/ablation_scoring_60pr\hessian\r50_60pr_10ft\complete_pruning_report.txt,72.9,-3.2,59.9
-fisher,60.0,0.0,True,fisher,./experiments/paper_tables/results/ablation_scoring_60pr\fisher\r50_60pr_10ft\complete_pruning_report.txt,72.79,-3.31,59.9

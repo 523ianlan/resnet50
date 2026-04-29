@@ -12,6 +12,9 @@ class PruningConfig:
     def __init__(self):
         # ========== Basic Settings ==========
         self.experiment_name = "ResNet50_SecondOrderPruning"
+        self.model_prefix = "r50"
+        self.model_name = "resnet50"
+        self.pretrained = True
         self.seed = 42
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -30,6 +33,16 @@ class PruningConfig:
         self.enable_tf32 = True
         self.profile_data_time = False
         self.profile_interval = 50
+        self.shuffle_val = False
+        self.random_eval_subset = True
+
+        # ========== Model Shape / Toy Model Settings ==========
+        self.input_channels = 3
+        self.input_height = 224
+        self.input_width = 224
+        self.num_classes = 1000
+        self.mlp_hidden_dims = [1024, 512]
+        self.cnn_channels = [32, 64, 128]
         
         # ========== Data Augmentation (ResNet specific) ==========
         self.augmentation = {
@@ -217,7 +230,7 @@ class PruningConfig:
     def get_experiment_dir(self) -> str:
         exp_dir = os.path.join(
             self.save_dir,
-            f'r50_{self.compression_percentage}pr_{self.fine_tune_epochs}ft'
+            f'{self.model_prefix}_{self.compression_percentage}pr_{self.fine_tune_epochs}ft'
         )
         if self.custom_tag:
             exp_dir += f'_{self.custom_tag}'
@@ -226,7 +239,7 @@ class PruningConfig:
     
     def get_model_path(self, suffix: str = "") -> str:
         exp_dir = self.get_experiment_dir()
-        base_name = f'r50_{self.compression_percentage}pr'
+        base_name = f'{self.model_prefix}_{self.compression_percentage}pr'
         if suffix:
             return os.path.join(exp_dir, f'{base_name}_{suffix}.pth')
         return os.path.join(exp_dir, f'{base_name}.pth')

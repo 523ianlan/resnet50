@@ -43,8 +43,8 @@ def evaluate_with_topk_r50(
             _, top1_pred = torch.max(outputs, 1)
             top1_correct += (top1_pred == labels).sum().item()
             
-            # Top-5
-            _, top5_pred = outputs.topk(5, 1, True, True)
+            topk = min(5, outputs.size(1))
+            _, top5_pred = outputs.topk(topk, 1, True, True)
             top5_correct += (top5_pred == labels.view(-1, 1)).any(dim=1).sum().item()
             
             total += labels.size(0)

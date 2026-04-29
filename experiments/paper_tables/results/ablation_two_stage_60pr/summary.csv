@@ -1,5 +1,0 @@
-name,target_compression,uncertainty_alpha,use_fisher_scores,stage2_score_metric,report_path,final_top1,final_accuracy_change,achieved_compression
-wo_fisher,60.0,1.0,False,magnitude,./experiments/paper_tables/results/ablation_two_stage_60pr\wo_fisher\r50_60pr_10ft\complete_pruning_report.txt,44.36,-31.74,60.0
-ufalp_full,60.0,1.0,True,fisher,./experiments/paper_tables/results/ablation_two_stage_60pr\ufalp_full\r50_60pr_10ft\complete_pruning_report.txt,46.89,-29.21,60.0
-wo_fisher,60.0,1.0,False,magnitude,./experiments/paper_tables/results/ablation_two_stage_60pr\wo_fisher\r50_60pr_10ft\complete_pruning_report.txt,73.33,-2.77,60.0
-ufalp_full,60.0,1.0,True,fisher,./experiments/paper_tables/results/ablation_two_stage_60pr\ufalp_full\r50_60pr_10ft\complete_pruning_report.txt,73.14,-2.96,60.0

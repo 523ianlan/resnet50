@@ -119,6 +119,33 @@ def _build_calibration_subset(
     return Subset(train_dataset, calib_indices)
 
 
+def _maybe_build_eval_subset(
+    config: PruningConfig,
+    val_dataset: Dataset
+) -> Tuple[Dataset, bool]:
+    """
+    When eval_max_batches is small, evaluate on a random subset instead of the
+    first few class-sorted batches. This keeps quick smoke tests meaningful.
+    """
+    eval_max_batches = int(getattr(config, "eval_max_batches", 0))
+    batch_size = int(getattr(config, "batch_size", 1))
+    use_random_subset = bool(getattr(config, "random_eval_subset", True))
+
+    if eval_max_batches <= 0 or not use_random_subset:
+        return val_dataset, bool(getattr(config, "shuffle_val", False))
+
+    subset_size = min(len(val_dataset), max(1, eval_max_batches * batch_size))
+    g = torch.Generator()
+    g.manual_seed(int(getattr(config, "seed", 42)) + 999)
+    perm = torch.randperm(len(val_dataset), generator=g).tolist()
+    subset = Subset(val_dataset, perm[:subset_size])
+    print(
+        f"Using random validation subset for quick eval: "
+        f"{subset_size} samples (~{eval_max_batches} batches)"
+    )
+    return subset, True
+
+
 def get_resnet_data_loaders_with_calib(
     config: PruningConfig,
 ) -> Tuple[DataLoader, DataLoader, Optional[DataLoader]]:
@@ -166,10 +193,12 @@ def get_resnet_data_loaders_with_calib(
         generator=generator,
         **loader_kwargs
     )
+    eval_dataset, eval_shuffle = _maybe_build_eval_subset(config, val_dataset)
+
     val_loader = DataLoader(
-        val_dataset,
+        eval_dataset,
         batch_size=config.batch_size,
-        shuffle=False,
+        shuffle=eval_shuffle,
         generator=generator,
         **loader_kwargs
     )
@@ -251,10 +280,12 @@ def get_resnet_data_loaders(
     )
     
     # Validation DataLoader
+    eval_dataset, eval_shuffle = _maybe_build_eval_subset(config, val_dataset)
+
     val_loader = DataLoader(
-        val_dataset,
+        eval_dataset,
         batch_size=config.batch_size,
-        shuffle=False,
+        shuffle=eval_shuffle,
         generator=generator,
         **loader_kwargs
     )
