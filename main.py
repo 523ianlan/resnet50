@@ -471,7 +471,7 @@ def main_r50(
             else:
                 print("Stage 2 Fisher scoring disabled; using magnitude-based ranking.")
 
-    # --- ????閬箏? ---
+    # --- Sensitivity Analysis Visualization ---
     vis_dir = os.path.join(save_dir, 'visualizations')
     os.makedirs(vis_dir, exist_ok=True)
     analyze_all_layer_sensitivity_r50(svd_layers, component_impact_scores, vis_dir)
@@ -485,7 +485,7 @@ def main_r50(
         layer_importance_stage1, svd_layers, config=config, total_model_params=orig_params
     )
     
-    # 蝜芾ˊ撅丁udget Allocation??
+    # --- Visualize Budget Allocation ---
     type_keep_ratios = plot_layer_budget_allocation_r50(
         svd_layers, keep_ratios, layer_importance_stage1, vis_dir
     )
