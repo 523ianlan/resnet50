@@ -116,13 +116,16 @@ def _prepare_runtime(
 ):
     if model is None:
         built_in_model_name = getattr(config, "model_name", "resnet50")
-        print(f"\n1. Loading built-in model: {built_in_model_name}")
+        print(
+            "\n1. No custom nn.Module was provided; "
+            f"loading built-in model from config.model_name: {built_in_model_name}"
+        )
         model, data_config, family = setup_builtin_model(
             config,
             model_name=built_in_model_name,
             pretrained=bool(getattr(config, "pretrained", True)),
         )
-        print("\n2. Preparing data")
+        print("\n2. Preparing data loaders for the built-in model")
         train_loader, val_loader, calib_loader = get_resnet_data_loaders_with_calib(config)
         if calib_loader is None:
             print("Calibration loader not specified; using train_loader as D_cal.")
@@ -138,10 +141,14 @@ def _prepare_runtime(
         return model, train_loader, val_loader, calib_loader, family, model_name, model_builder
 
     if train_loader is None or val_loader is None:
-        raise ValueError("When passing a custom model, train_loader and val_loader are required.")
+        raise ValueError(
+            "When passing a custom nn.Module, train_loader and val_loader must also be provided."
+        )
 
     family = model_family or _detect_model_family(model)
     model_name = model.__class__.__name__
+    print(f"\n1. Using caller-provided custom nn.Module: {model_name}")
+    print("2. Using caller-provided data loaders")
     if calib_loader is None:
         calib_loader = train_loader
         print("Calibration loader not provided; using train_loader as D_cal.")
@@ -232,10 +239,15 @@ def main_r50(
     model_family: Optional[str] = None,
 ):
     """
-    Main pruning flow for ResNet-50
-    
+    Main pruning flow for built-in or caller-provided models.
+
     Args:
-        config: Pruning config
+        config: Pruning config.
+        model: Optional custom nn.Module. If omitted, a built-in model is loaded from config.model_name.
+        train_loader: Training loader for a custom model.
+        val_loader: Validation loader for a custom model.
+        calib_loader: Optional calibration loader. Defaults to train_loader for custom models.
+        model_family: Optional explicit family for a custom model, such as cnn or mlp.
     """
     if config is None:
         config = PruningConfig()
@@ -679,7 +691,8 @@ def prune_and_finetune_model(
         model_type: Optional model family name such as cnn, resnet50, mlp.
         pruning_ratio: Target pruning/compression ratio.
         fine_tune_epochs: Number of fine-tuning epochs after pruning.
-        model: Optional custom model instance. If omitted, ResNet-50 is loaded.
+        model: Optional custom nn.Module instance. If omitted, the built-in model named by
+            config.model_name is loaded. The default config model_name is resnet50.
         train_loader: Required when model is provided.
         val_loader: Required when model is provided.
         calib_loader: Optional calibration loader. Defaults to train_loader.
@@ -918,11 +931,11 @@ def main():
     
     # ==================== Initialize Config ====================
     if args.config:
-        print(f"Loading configuration from: {args.config}")
+        print(f"Loading base configuration from file: {args.config}")
         config = PruningConfig.load(args.config)
     else:
         config = PruningConfig()
-        print("Using default configuration")
+        print("Using PruningConfig defaults as the base configuration")
     
     # ==================== CLI Parameter Override ====================
     for key, value in vars(args).items():
