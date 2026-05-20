@@ -18,16 +18,12 @@ from data.build import get_resnet_data_loaders_with_calib
 from models.resnet_setup import get_model_family, setup_builtin_model, setup_resnet_model
 from models.custom_layers import SimpleSVDConv, SimpleSVDLinear
 from models.utils import collect_prunable_layers, get_resnet_parent_and_name
-from pruning.stage1_uncertainty import compute_uncertainty_stage1_r50
-from pruning.stage2_fisher import compute_fisher_impact_stage2_r50
-from pruning.allocation import allocate_pruning_binary_search_r50
 from pruning.core import replace_prunable_layer
+from pruning.pipeline import run_two_stage_pruning_allocation_r50
 from utils.engine import fine_tune_resnet_improved
 from utils.metrics import evaluate_with_topk_r50, compute_flops_resnet
 from utils.visualization import (
     plot_training_history,
-    plot_layer_budget_allocation_r50,
-    analyze_all_layer_sensitivity_r50
 )
 from utils.helpers import ModelStructureManager, generate_report, batch_clean_experiment
 
@@ -401,106 +397,19 @@ def main_r50(
     print(f"Created {len(svd_layers)} SVD layers")
     
     # ========== 6. Two-Stage Pruning Allocation ==========
-    print("\n6. Two-Stage Adaptive Budget Allocation")
-
-    allocation_strategy = getattr(config, "allocation_strategy", "binary_search")
-    stage2_metric = getattr(config, "stage2_score_metric", "fisher")
-
-    def _compute_layer_importance_from_scores(scores_dict):
-        raw = {}
-        for lname, scores in scores_dict.items():
-            if scores is None or len(scores) == 0:
-                continue
-            raw[lname] = float(np.mean(scores))
-        if not raw:
-            return {}
-        vals = np.array(list(raw.values()), dtype=np.float64)
-        min_v, max_v = vals.min(), vals.max()
-        norm = {}
-        for k, v in raw.items():
-            if max_v - min_v > 1e-8:
-                norm[k] = (v - min_v) / (max_v - min_v)
-            else:
-                norm[k] = 0.5
-        return norm
-
-    layer_importance_stage1 = {}
-    component_impact_scores = {}
-
-    if allocation_strategy == "global_fisher":
-        print("\n" + "="*80)
-        print("Stage 1 (Global Fisher Allocation): using Fisher-based layer scores")
-        print("="*80)
-        
-        # We always need Fisher for the inter-layer allocation in this mode
-        fisher_scores = compute_fisher_impact_stage2_r50(
-            model, svd_layers, train_loader, config=config
-        )
-        layer_importance_stage1 = _compute_layer_importance_from_scores(fisher_scores)
-        
-        # Decouple Selection metric for Stage 2
-        if stage2_metric == "magnitude":
-            component_impact_scores = {}
-            print("Budget Allocation: Fisher-Mean | Component Selection: Magnitude")
-        elif stage2_metric == "energy":
-            component_impact_scores = {
-                name: (layer.get_sigma().detach().cpu().numpy() ** 2)
-                for name, layer in svd_layers.items()
-            }
-            print("Budget Allocation: Fisher-Mean | Component Selection: Energy")
-        else:
-            component_impact_scores = fisher_scores
-            print("Budget Allocation: Fisher-Mean | Component Selection: Fisher")
-    else:
-        # --- Stage 1: Inter-layer Uncertainty ---
-        print("\n" + "="*80)
-        print("Stage 1: Inter-layer Budget Allocation (Uncertainty Estimation)")
-        print("="*80)
-
-        layer_importance_stage1 = compute_uncertainty_stage1_r50(
-            model, svd_layers, calib_loader, config=config
-        )
-
-        # --- Stage 2: Intra-layer Component Selection ---
-        print("\n" + "="*80)
-        print("Stage 2: Intra-layer Component Selection (Fisher-Aware Scoring)")
-        print("="*80)
-
-        if stage2_metric == "magnitude":
-            component_impact_scores = {}
-            print("Stage 2 metric: magnitude (no Fisher scores).")
-        elif stage2_metric == "energy":
-            component_impact_scores = {
-                name: (layer.get_sigma().detach().cpu().numpy() ** 2)
-                for name, layer in svd_layers.items()
-            }
-            print("Stage 2 metric: energy (sigma^2).")
-        else:
-            if bool(getattr(config, "use_fisher_scores", True)):
-                component_impact_scores = compute_fisher_impact_stage2_r50(
-                    model, svd_layers, train_loader, config=config
-                )
-            else:
-                print("Stage 2 Fisher scoring disabled; using magnitude-based ranking.")
-
-    # --- Sensitivity Analysis Visualization ---
-    vis_dir = os.path.join(save_dir, 'visualizations')
-    os.makedirs(vis_dir, exist_ok=True)
-    analyze_all_layer_sensitivity_r50(svd_layers, component_impact_scores, vis_dir)
-    
-    # --- Global Allocation: Binary Search ---
-    print("\n" + "="*80)
-    print(f"Allocation: Binary Search for Target Compression ({config.target_compression*100:.1f}%)")
-    print("="*80)
-    
-    keep_ratios = allocate_pruning_binary_search_r50(
-        layer_importance_stage1, svd_layers, config=config, total_model_params=orig_params
+    allocation_outputs = run_two_stage_pruning_allocation_r50(
+        model=model,
+        svd_layers=svd_layers,
+        train_loader=train_loader,
+        calib_loader=calib_loader,
+        save_dir=save_dir,
+        orig_params=orig_params,
+        config=config,
     )
-    
-    # --- Visualize Budget Allocation ---
-    type_keep_ratios = plot_layer_budget_allocation_r50(
-        svd_layers, keep_ratios, layer_importance_stage1, vis_dir
-    )
+    layer_importance_stage1 = allocation_outputs["layer_importance_stage1"]
+    component_impact_scores = allocation_outputs["component_impact_scores"]
+    keep_ratios = allocation_outputs["keep_ratios"]
+    type_keep_ratios = allocation_outputs["type_keep_ratios"]
     
     # ========== 7. Execute Pruning ==========
     print("\n7. Executing pruning")
