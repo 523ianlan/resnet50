@@ -152,6 +152,7 @@ class PruningConfig:
         self.use_gradient_clip = True
         self.clip_grad_norm = 1.0
         self.stochastic_depth_prob = 0.0       # Stochastic Depth
+        self.loss_type = 'ce'                  # 'ce' or 'mse'
         
         # Mixed precision training
         self.mixed_precision = False

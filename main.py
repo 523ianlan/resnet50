@@ -815,6 +815,8 @@ def main():
                         help='Layer-wise decay rate')
     parser.add_argument('--warmup-epochs', type=int, default=None,
                         help='Number of warmup epochs')
+    parser.add_argument('--loss-type', type=str, choices=['ce', 'mse'], default=None,
+                        help='Loss function to use during fine-tuning (ce for CrossEntropy, mse for Square Error)')
     parser.add_argument('--mixed-precision', action='store_true', default=None,
                         help='Enable AMP mixed precision')
     parser.add_argument('--eval-max-batches', type=int, default=None,

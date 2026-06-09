@@ -185,7 +185,12 @@ def train_one_epoch_r50(
         if scaler:
             with torch.amp.autocast(device_type=device.type, enabled=True):
                 outputs = model(images)
-                loss = criterion(outputs, labels)
+                if getattr(config, "loss_type", "ce") == "mse":
+                    labels_one_hot = torch.nn.functional.one_hot(labels, num_classes=outputs.size(1)).float()
+                    outputs_prob = torch.softmax(outputs, dim=1)
+                    loss = criterion(outputs_prob, labels_one_hot)
+                else:
+                    loss = criterion(outputs, labels)
             
             scaler.scale(loss).backward()
             if getattr(config, "use_gradient_clip", False):
@@ -195,7 +200,12 @@ def train_one_epoch_r50(
             scaler.update()
         else:
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            if getattr(config, "loss_type", "ce") == "mse":
+                labels_one_hot = torch.nn.functional.one_hot(labels, num_classes=outputs.size(1)).float()
+                outputs_prob = torch.softmax(outputs, dim=1)
+                loss = criterion(outputs_prob, labels_one_hot)
+            else:
+                loss = criterion(outputs, labels)
             loss.backward()
             if getattr(config, "use_gradient_clip", False):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_grad_norm)
@@ -276,7 +286,12 @@ def validate_one_epoch_r50(
                 images = images.to(memory_format=torch.channels_last)
 
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            if getattr(config, "loss_type", "ce") == "mse":
+                labels_one_hot = torch.nn.functional.one_hot(labels, num_classes=outputs.size(1)).float()
+                outputs_prob = torch.softmax(outputs, dim=1)
+                loss = criterion(outputs_prob, labels_one_hot)
+            else:
+                loss = criterion(outputs, labels)
 
             bs = images.size(0)
             total_samples += bs
@@ -347,10 +362,14 @@ def fine_tune_resnet_improved(
     if device.type == "cuda" and bool(getattr(config, "channels_last", False)):
         model = model.to(memory_format=torch.channels_last)
 
-    if config.use_label_smoothing:
-        criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
+    if getattr(config, "loss_type", "ce") == "mse":
+        criterion = nn.MSELoss()
+        print("Using MSELoss for fine-tuning")
     else:
-        criterion = nn.CrossEntropyLoss()
+        if config.use_label_smoothing:
+            criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
+        else:
+            criterion = nn.CrossEntropyLoss()
 
     ft_lr = getattr(config, "fine_tune_lr", None)
     if ft_lr is None:
