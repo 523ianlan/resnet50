@@ -1,13 +1,26 @@
-# Python 產生的暫存檔
+# Python caches
 __pycache__/
 *.py[cod]
 *$py.class
 
-# 模型權重檔案 (你的 ResNet50 訓練結果)
+# Model checkpoints and generated images
 *.pth
 *.pt
 *.h5
+*.png
+*.jpg
+*.jpeg
 
-# 隱藏資料夾
+# Temporary experiment metadata
+full_history_val_only.json
+recovered_history_temp.json
+experiments/paper_tables/tmp_ucfr_*.json
+
+# Experiment outputs
+results/
+baseline_check/
+tmp_resnet18/
+
+# Local editor folders
 .ipynb_checkpoints/
 .vscode/

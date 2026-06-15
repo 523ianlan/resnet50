@@ -82,7 +82,7 @@ class PruningConfig:
         # ========== SVD Parameters ==========
         self.svd_epsilon = 1e-12
         
-        # ========== Stage 1: 銝Ⅱ摰找摯閮?==========
+        # ========== Stage 1: Inter-layer Uncertainty Scoring ==========
         self.mc_samples = 20
         self.mc_dropout_p = 0.1          # MC Dropout probability (Stage 1)
         self.calib_batches = 5           # Calibration batches (0 = use all computation from calibration loader)
@@ -142,14 +142,14 @@ class PruningConfig:
         
         # Optimizer settings
         self.optimizer = {
-            'name': 'adamw',                  # 'adamw' ??'sgd'
+            'name': 'adamw',                  # Supported: 'adamw' or 'sgd'
             'betas': [0.9, 0.999],
             'eps': 1e-8
         }
         
         # Learning rate scheduler
         self.scheduler = {
-            'name': 'cosine',                  # 'cosine' ??'step'
+            'name': 'cosine',                  # Supported: 'cosine' or 'step'
             'cosine': {
                 'eta_min_ratio': 0.01
             },
@@ -165,6 +165,7 @@ class PruningConfig:
         self.use_gradient_clip = True
         self.clip_grad_norm = 1.0
         self.stochastic_depth_prob = 0.0       # Stochastic Depth
+        self.loss_type = 'ce'                  # 'ce' or 'mse'
         
         # Mixed precision training
         self.mixed_precision = False
@@ -183,7 +184,7 @@ class PruningConfig:
         self.topk = (1, 5)
         self.test_interval = 1
         self.save_best = True
-        self.log_interval = 200                 # 瘥?憭???Batch ?郊銝甈⊿脣漲璇?
+        self.log_interval = 200                 # Print training progress every N batches
         
         # ========== Logging & Storage ==========
         self.save_dir = "./results"
@@ -204,7 +205,7 @@ class PruningConfig:
             'dpi': 150
         }
         
-        # ??撅祆?
+        # Derived experiment naming fields
         self._compression_percentage = int(self.target_compression * 100)
         self.custom_tag = ''
     

@@ -18,16 +18,12 @@ from data.build import get_resnet_data_loaders_with_calib
 from models.resnet_setup import get_model_family, setup_builtin_model, setup_resnet_model
 from models.custom_layers import SimpleSVDConv, SimpleSVDLinear
 from models.utils import collect_prunable_layers, get_resnet_parent_and_name
-from pruning.stage1_uncertainty import compute_uncertainty_stage1_r50
-from pruning.stage2_fisher import compute_fisher_impact_stage2_r50
-from pruning.allocation import allocate_pruning_binary_search_r50
 from pruning.core import replace_prunable_layer
+from pruning.pipeline import run_two_stage_pruning_allocation_r50
 from utils.engine import fine_tune_resnet_improved
 from utils.metrics import compute_flops_resnet, evaluate_model
 from utils.visualization import (
     plot_training_history,
-    plot_layer_budget_allocation_r50,
-    analyze_all_layer_sensitivity_r50
 )
 from utils.helpers import ModelStructureManager, generate_report, batch_clean_experiment
 from utils.task_utils import (
@@ -127,13 +123,16 @@ def _prepare_runtime(
 ):
     if model is None:
         built_in_model_name = getattr(config, "model_name", "resnet50")
-        print(f"\n1. Loading built-in model: {built_in_model_name}")
+        print(
+            "\n1. No custom nn.Module was provided; "
+            f"loading built-in model from config.model_name: {built_in_model_name}"
+        )
         model, data_config, family = setup_builtin_model(
             config,
             model_name=built_in_model_name,
             pretrained=bool(getattr(config, "pretrained", True)),
         )
-        print("\n2. Preparing data")
+        print("\n2. Preparing data loaders for the built-in model")
         train_loader, val_loader, calib_loader = get_resnet_data_loaders_with_calib(config)
         if calib_loader is None:
             print("Calibration loader not specified; using train_loader as D_cal.")
@@ -149,10 +148,14 @@ def _prepare_runtime(
         return model, train_loader, val_loader, calib_loader, family, model_name, model_builder
 
     if train_loader is None or val_loader is None:
-        raise ValueError("When passing a custom model, train_loader and val_loader are required.")
+        raise ValueError(
+            "When passing a custom nn.Module, train_loader and val_loader must also be provided."
+        )
 
     family = model_family or _detect_model_family(model)
     model_name = model.__class__.__name__
+    print(f"\n1. Using caller-provided custom nn.Module: {model_name}")
+    print("2. Using caller-provided data loaders")
     if calib_loader is None:
         calib_loader = train_loader
         print("Calibration loader not provided; using train_loader as D_cal.")
@@ -309,10 +312,15 @@ def main_r50(
     model_family: Optional[str] = None,
 ):
     """
-    Main pruning flow for ResNet-50
-    
+    Main pruning flow for built-in or caller-provided models.
+
     Args:
-        config: Pruning config
+        config: Pruning config.
+        model: Optional custom nn.Module. If omitted, a built-in model is loaded from config.model_name.
+        train_loader: Training loader for a custom model.
+        val_loader: Validation loader for a custom model.
+        calib_loader: Optional calibration loader. Defaults to train_loader for custom models.
+        model_family: Optional explicit family for a custom model, such as cnn or mlp.
     """
     if config is None:
         config = PruningConfig()
@@ -463,106 +471,19 @@ def main_r50(
     print(f"Created {len(svd_layers)} SVD layers")
     
     # ========== 6. Two-Stage Pruning Allocation ==========
-    print("\n6. Two-Stage Adaptive Budget Allocation")
-
-    allocation_strategy = getattr(config, "allocation_strategy", "binary_search")
-    stage2_metric = getattr(config, "stage2_score_metric", "fisher")
-
-    def _compute_layer_importance_from_scores(scores_dict):
-        raw = {}
-        for lname, scores in scores_dict.items():
-            if scores is None or len(scores) == 0:
-                continue
-            raw[lname] = float(np.mean(scores))
-        if not raw:
-            return {}
-        vals = np.array(list(raw.values()), dtype=np.float64)
-        min_v, max_v = vals.min(), vals.max()
-        norm = {}
-        for k, v in raw.items():
-            if max_v - min_v > 1e-8:
-                norm[k] = (v - min_v) / (max_v - min_v)
-            else:
-                norm[k] = 0.5
-        return norm
-
-    layer_importance_stage1 = {}
-    component_impact_scores = {}
-
-    if allocation_strategy == "global_fisher":
-        print("\n" + "="*80)
-        print("Stage 1 (Global Fisher Allocation): using Fisher-based layer scores")
-        print("="*80)
-        
-        # We always need Fisher for the inter-layer allocation in this mode
-        fisher_scores = compute_fisher_impact_stage2_r50(
-            model, svd_layers, train_loader, config=config
-        )
-        layer_importance_stage1 = _compute_layer_importance_from_scores(fisher_scores)
-        
-        # Decouple Selection metric for Stage 2
-        if stage2_metric == "magnitude":
-            component_impact_scores = {}
-            print("Budget Allocation: Fisher-Mean | Component Selection: Magnitude")
-        elif stage2_metric == "energy":
-            component_impact_scores = {
-                name: (layer.get_sigma().detach().cpu().numpy() ** 2)
-                for name, layer in svd_layers.items()
-            }
-            print("Budget Allocation: Fisher-Mean | Component Selection: Energy")
-        else:
-            component_impact_scores = fisher_scores
-            print("Budget Allocation: Fisher-Mean | Component Selection: Fisher")
-    else:
-        # --- Stage 1: Inter-layer Uncertainty ---
-        print("\n" + "="*80)
-        print("Stage 1: Inter-layer Budget Allocation (Uncertainty Estimation)")
-        print("="*80)
-
-        layer_importance_stage1 = compute_uncertainty_stage1_r50(
-            model, svd_layers, calib_loader, config=config
-        )
-
-        # --- Stage 2: Intra-layer Component Selection ---
-        print("\n" + "="*80)
-        print("Stage 2: Intra-layer Component Selection (Fisher-Aware Scoring)")
-        print("="*80)
-
-        if stage2_metric == "magnitude":
-            component_impact_scores = {}
-            print("Stage 2 metric: magnitude (no Fisher scores).")
-        elif stage2_metric == "energy":
-            component_impact_scores = {
-                name: (layer.get_sigma().detach().cpu().numpy() ** 2)
-                for name, layer in svd_layers.items()
-            }
-            print("Stage 2 metric: energy (sigma^2).")
-        else:
-            if bool(getattr(config, "use_fisher_scores", True)):
-                component_impact_scores = compute_fisher_impact_stage2_r50(
-                    model, svd_layers, train_loader, config=config
-                )
-            else:
-                print("Stage 2 Fisher scoring disabled; using magnitude-based ranking.")
-
-    # --- ????閬箏? ---
-    vis_dir = os.path.join(save_dir, 'visualizations')
-    os.makedirs(vis_dir, exist_ok=True)
-    analyze_all_layer_sensitivity_r50(svd_layers, component_impact_scores, vis_dir)
-    
-    # --- Global Allocation: Binary Search ---
-    print("\n" + "="*80)
-    print(f"Allocation: Binary Search for Target Compression ({config.target_compression*100:.1f}%)")
-    print("="*80)
-    
-    keep_ratios = allocate_pruning_binary_search_r50(
-        layer_importance_stage1, svd_layers, config=config, total_model_params=orig_params
+    allocation_outputs = run_two_stage_pruning_allocation_r50(
+        model=model,
+        svd_layers=svd_layers,
+        train_loader=train_loader,
+        calib_loader=calib_loader,
+        save_dir=save_dir,
+        orig_params=orig_params,
+        config=config,
     )
-    
-    # 蝜芾ˊ撅丁udget Allocation??
-    type_keep_ratios = plot_layer_budget_allocation_r50(
-        svd_layers, keep_ratios, layer_importance_stage1, vis_dir
-    )
+    layer_importance_stage1 = allocation_outputs["layer_importance_stage1"]
+    component_impact_scores = allocation_outputs["component_impact_scores"]
+    keep_ratios = allocation_outputs["keep_ratios"]
+    type_keep_ratios = allocation_outputs["type_keep_ratios"]
     
     # ========== 7. Execute Pruning ==========
     print("\n7. Executing pruning")
@@ -748,7 +669,8 @@ def prune_and_finetune_model(
         model_type: Optional model family name such as cnn, resnet50, mlp.
         pruning_ratio: Target pruning/compression ratio.
         fine_tune_epochs: Number of fine-tuning epochs after pruning.
-        model: Optional custom model instance. If omitted, ResNet-50 is loaded.
+        model: Optional custom nn.Module instance. If omitted, the built-in model named by
+            config.model_name is loaded. The default config model_name is resnet50.
         train_loader: Required when model is provided.
         val_loader: Required when model is provided.
         calib_loader: Optional calibration loader. Defaults to train_loader.
@@ -982,6 +904,8 @@ def main():
                         help='Layer-wise decay rate')
     parser.add_argument('--warmup-epochs', type=int, default=None,
                         help='Number of warmup epochs')
+    parser.add_argument('--loss-type', type=str, choices=['ce', 'mse'], default=None,
+                        help='Loss function to use during fine-tuning (ce for CrossEntropy, mse for Square Error)')
     parser.add_argument('--mixed-precision', action='store_true', default=None,
                         help='Enable AMP mixed precision')
     parser.add_argument('--eval-max-batches', type=int, default=None,
@@ -1007,11 +931,11 @@ def main():
     
     # ==================== Initialize Config ====================
     if args.config:
-        print(f"Loading configuration from: {args.config}")
+        print(f"Loading base configuration from file: {args.config}")
         config = PruningConfig.load(args.config)
     else:
         config = PruningConfig()
-        print("Using default configuration")
+        print("Using PruningConfig defaults as the base configuration")
     
     # ==================== CLI Parameter Override ====================
     for key, value in vars(args).items():

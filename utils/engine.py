@@ -201,7 +201,7 @@ def train_one_epoch_r50(
                 outputs = model(images)
                 outputs, labels_for_loss = prepare_loss_inputs(outputs, labels, config)
                 loss = criterion(outputs, labels_for_loss)
-             
+
             scaler.scale(loss).backward()
             if getattr(config, "use_gradient_clip", False):
                 scaler.unscale_(optimizer)
