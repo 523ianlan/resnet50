@@ -2,11 +2,12 @@
 
 import torch
 import torch.nn as nn
-from typing import Tuple, Optional
+from typing import Dict, Tuple, Optional
 from torch.utils.data import DataLoader
 from fvcore.nn import FlopCountAnalysis
 
 from configs.config import PruningConfig
+from utils.task_utils import finalize_metric_totals, init_metric_totals, is_regression_task, update_metric_totals
 
 def evaluate_with_topk_r50(
     model: nn.Module,
@@ -17,39 +18,49 @@ def evaluate_with_topk_r50(
     """
     Evaluate model, return top-1 and top-5 accuracy (using Float64 high precision)
     """
+    if config is not None and is_regression_task(config):
+        raise ValueError("evaluate_with_topk_r50 is classification-only. Use evaluate_model for regression.")
     if config is None:
         config = PruningConfig()
     if device is None:
         device = config.device
     
-    model.eval()
-    top1_correct = 0
-    top5_correct = 0
-    total = 0
+    metrics = evaluate_model(model, loader, config=config, device=device)
+    return float(metrics["top1"]), float(metrics["top5"])
 
+
+def evaluate_model(
+    model: nn.Module,
+    loader: DataLoader,
+    config: PruningConfig = None,
+    device: Optional[torch.device] = None
+) -> Dict[str, float]:
+    """Evaluate model and return task-aware metrics."""
+    if config is None:
+        config = PruningConfig()
+    if device is None:
+        device = config.device
+
+    model.eval()
+    totals = init_metric_totals(config)
     device = device if device is not None else next(model.parameters()).device
-    
+
     with torch.no_grad():
         for i, (images, labels) in enumerate(loader):
-            if config and hasattr(config, 'eval_max_batches') and config.eval_max_batches > 0 and i >= config.eval_max_batches:
+            if (
+                config
+                and hasattr(config, 'eval_max_batches')
+                and config.eval_max_batches > 0
+                and i >= config.eval_max_batches
+            ):
                 break
 
             images = images.to(device)
             labels = labels.to(device)
-            
             outputs = model(images)
-            
-            # Top-1
-            _, top1_pred = torch.max(outputs, 1)
-            top1_correct += (top1_pred == labels).sum().item()
-            
-            topk = min(5, outputs.size(1))
-            _, top5_pred = outputs.topk(topk, 1, True, True)
-            top5_correct += (top5_pred == labels.view(-1, 1)).any(dim=1).sum().item()
-            
-            total += labels.size(0)
-    
-    return 100.0 * top1_correct / total, 100.0 * top5_correct / total
+            update_metric_totals(totals, outputs, labels, config)
+
+    return finalize_metric_totals(totals, config)
 
 
 def compute_flops_resnet(

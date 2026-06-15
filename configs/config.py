@@ -40,9 +40,22 @@ class PruningConfig:
         self.input_channels = 3
         self.input_height = 224
         self.input_width = 224
+        self.task_type = "classification"
+        self.dataset_type = "imagefolder"
+        self.loss_name = "cross_entropy"
         self.num_classes = 1000
+        self.target_dim = 1
+        self.primary_metric = "top1"
+        self.secondary_metric = "top5"
+        self.higher_is_better = True
         self.mlp_hidden_dims = [1024, 512]
         self.cnn_channels = [32, 64, 128]
+        self.train_csv = None
+        self.val_csv = None
+        self.image_column = "image_path"
+        self.target_column = "target"
+        self.target_columns = None
+        self.csv_delimiter = ","
         
         # ========== Data Augmentation (ResNet specific) ==========
         self.augmentation = {

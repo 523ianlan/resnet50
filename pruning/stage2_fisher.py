@@ -7,6 +7,8 @@ from tqdm import tqdm
 from typing import Dict
 from torch.utils.data import DataLoader
 
+from utils.task_utils import build_criterion, prepare_loss_inputs
+
 
 def compute_fisher_impact_stage2_r50(
     model: nn.Module,
@@ -39,7 +41,7 @@ def compute_fisher_impact_stage2_r50(
         for name, layer in svd_layers.items()
     }
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = build_criterion(config)
     total_batches = 0
 
     for layer in svd_layers.values():
@@ -72,8 +74,10 @@ def compute_fisher_impact_stage2_r50(
 
             model.zero_grad()
             outputs = model(images)
-            loss_a = criterion(outputs, labels_a)
-            loss_b = criterion(outputs, labels_b)
+            outputs_a, labels_a = prepare_loss_inputs(outputs, labels_a, config)
+            outputs_b, labels_b = prepare_loss_inputs(outputs, labels_b, config)
+            loss_a = criterion(outputs_a, labels_a)
+            loss_b = criterion(outputs_b, labels_b)
             loss = lam * loss_a + (1 - lam) * loss_b
         else:
             model.zero_grad()
@@ -155,7 +159,7 @@ def compute_fisher_components_stage2_r50(
         for name, layer in svd_layers.items()
     }
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = build_criterion(config)
     total_batches = 0
 
     for layer in svd_layers.values():
@@ -188,12 +192,16 @@ def compute_fisher_components_stage2_r50(
 
             model.zero_grad()
             outputs = model(images)
-            loss_a = criterion(outputs, labels_a)
-            loss_b = criterion(outputs, labels_b)
+            outputs_a, labels_a = prepare_loss_inputs(outputs, labels_a, config)
+            outputs_b, labels_b = prepare_loss_inputs(outputs, labels_b, config)
+            loss_a = criterion(outputs_a, labels_a)
+            loss_b = criterion(outputs_b, labels_b)
             loss = lam * loss_a + (1 - lam) * loss_b
         else:
             model.zero_grad()
             outputs = model(images)
+            outputs, labels = prepare_loss_inputs(outputs, labels, config)
+            outputs, labels = prepare_loss_inputs(outputs, labels, config)
             loss = criterion(outputs, labels)
 
         target_params = [layer.get_score_param() for layer in svd_layers.values()]

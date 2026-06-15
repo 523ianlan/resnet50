@@ -11,6 +11,20 @@ import os
 import time
 
 from configs.config import PruningConfig
+from utils.metrics import evaluate_model
+from utils.task_utils import (
+    build_criterion,
+    finalize_metric_totals,
+    get_metric_display_name,
+    get_primary_metric_name,
+    get_primary_metric_value,
+    get_secondary_metric_name,
+    get_secondary_metric_value,
+    init_metric_totals,
+    is_better_metric,
+    prepare_loss_inputs,
+    update_metric_totals,
+)
 
 @torch.no_grad()
 def recalibrate_bn(model, loader, device, num_batches=100):
@@ -151,13 +165,12 @@ def train_one_epoch_r50(
     device: torch.device,
     scaler: Optional[torch.amp.GradScaler] = None,
     mixup_fn: Optional[Any] = None,
-) -> Tuple[float, float, float]:
+) -> Tuple[float, Dict[str, float]]:
     """Train one epoch."""
 
     model.train()
     train_loss = 0.0
-    top1_correct = 0
-    top5_correct = 0
+    totals = init_metric_totals(config)
     total = 0
 
     log_interval = getattr(config, "log_interval", 50)
@@ -165,6 +178,7 @@ def train_one_epoch_r50(
     profile_data = bool(getattr(config, "profile_data_time", False))
     profile_interval = int(getattr(config, "profile_interval", 50))
     last_end = time.perf_counter()
+    primary_metric_name = get_primary_metric_name(config)
 
     pbar = tqdm(loader, desc=f"Epoch {epoch} Training", leave=False)
 
@@ -185,8 +199,9 @@ def train_one_epoch_r50(
         if scaler:
             with torch.amp.autocast(device_type=device.type, enabled=True):
                 outputs = model(images)
-                loss = criterion(outputs, labels)
-            
+                outputs, labels_for_loss = prepare_loss_inputs(outputs, labels, config)
+                loss = criterion(outputs, labels_for_loss)
+             
             scaler.scale(loss).backward()
             if getattr(config, "use_gradient_clip", False):
                 scaler.unscale_(optimizer)
@@ -195,7 +210,8 @@ def train_one_epoch_r50(
             scaler.update()
         else:
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            outputs, labels_for_loss = prepare_loss_inputs(outputs, labels, config)
+            loss = criterion(outputs, labels_for_loss)
             loss.backward()
             if getattr(config, "use_gradient_clip", False):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_grad_norm)
@@ -212,18 +228,16 @@ def train_one_epoch_r50(
         # Metric accumulation (original method)
         bs = images.size(0)
         train_loss += loss.item() * bs
-        
-        _, top1_p = outputs.max(1)
-        top1_correct += (top1_p == labels).sum().item()
-        
-        topk = min(5, outputs.size(1))
-        _, top5_p = outputs.topk(topk, 1, True, True)
-        top5_correct += (top5_p == labels.view(-1, 1)).any(dim=1).sum().item()
+        update_metric_totals(totals, outputs, labels, config)
         
         total += bs
         
         if (batch_idx + 1) % log_interval == 0:
-            postfix = {"loss": f"{loss.item():.4f}", "acc": f"{100.0 * top1_correct / total:.2f}%"}
+            running_metrics = finalize_metric_totals(totals, config)
+            postfix = {
+                "loss": f"{loss.item():.4f}",
+                primary_metric_name: f"{running_metrics[primary_metric_name]:.4f}",
+            }
             if profile_data:
                 total_time = data_time + compute_time
                 imgs_s = bs / total_time if total_time > 0 else 0.0
@@ -237,7 +251,7 @@ def train_one_epoch_r50(
             pbar.set_postfix(postfix)
         last_end = time.perf_counter()
 
-    return train_loss / total, 100.0 * top1_correct / total, 100.0 * top5_correct / total
+    return train_loss / total, finalize_metric_totals(totals, config)
 
 
 def validate_one_epoch_r50(
@@ -246,13 +260,12 @@ def validate_one_epoch_r50(
     criterion: nn.Module,
     config: PruningConfig,
     device: torch.device,
-) -> Tuple[float, float, float]:
+) -> Tuple[float, Dict[str, float]]:
     """Validate one epoch."""
 
     model.eval()
     val_loss = torch.tensor(0.0, device=device, dtype=torch.float64)
-    top1_correct = torch.tensor(0.0, device=device, dtype=torch.float64)
-    top5_correct = torch.tensor(0.0, device=device, dtype=torch.float64)
+    totals = init_metric_totals(config)
     total_samples = 0
 
     channels_last = bool(getattr(config, "channels_last", False)) and device.type == "cuda"
@@ -276,24 +289,16 @@ def validate_one_epoch_r50(
                 images = images.to(memory_format=torch.channels_last)
 
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            outputs, labels_for_loss = prepare_loss_inputs(outputs, labels, config)
+            loss = criterion(outputs, labels_for_loss)
 
             bs = images.size(0)
             total_samples += bs
             val_loss += loss.to(torch.float64) * bs
-
-            _, top1_p = outputs.max(1)
-            top1_correct += (top1_p == labels).sum().to(torch.float64)
-
-            topk = min(5, outputs.size(1))
-            _, top5_p = outputs.topk(topk, 1, True, True)
-            top5_correct += (top5_p == labels.view(-1, 1)).any(dim=1).sum().to(torch.float64)
+            update_metric_totals(totals, outputs, labels, config)
 
     final_loss = (val_loss / total_samples).item()
-    final_top1 = (100.0 * top1_correct / total_samples).item()
-    final_top5 = (100.0 * top5_correct / total_samples).item()
-
-    return final_loss, final_top1, final_top5
+    return final_loss, finalize_metric_totals(totals, config)
 
 
 class FixedLRScheduler:
@@ -330,7 +335,7 @@ def fine_tune_resnet_improved(
     save_dir: str = None,
     start_epoch: int = 1,
     initial_history: Optional[Dict] = None,
-) -> Tuple[float, float, Dict]:
+) -> Tuple[Dict[str, float], Dict]:
     """Fine-tune ResNet-50."""
 
     if config is None:
@@ -347,10 +352,7 @@ def fine_tune_resnet_improved(
     if device.type == "cuda" and bool(getattr(config, "channels_last", False)):
         model = model.to(memory_format=torch.channels_last)
 
-    if config.use_label_smoothing:
-        criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
-    else:
-        criterion = nn.CrossEntropyLoss()
+    criterion = build_criterion(config)
 
     ft_lr = getattr(config, "fine_tune_lr", None)
     if ft_lr is None:
@@ -413,7 +415,9 @@ def fine_tune_resnet_improved(
 
     early_stopping = EarlyStopping(config, verbose=True)
 
-    best_val_acc = 0.0
+    primary_metric_name = get_primary_metric_name(config)
+    secondary_metric_name = get_secondary_metric_name(config)
+    best_val_primary = None
     best_epoch = 0
     best_state_dict = None
     if initial_history is not None:
@@ -421,13 +425,24 @@ def fine_tune_resnet_improved(
     else:
         history = {
             "train_loss": [],
-            "train_top1": [],
-            "train_top5": [],
             "val_loss": [],
-            "val_top1": [],
-            "val_top5": [],
+            "train_primary_metric": [],
+            "val_primary_metric": [],
+            "train_secondary_metric": [],
+            "val_secondary_metric": [],
             "learning_rate": [],
+            "primary_metric_name": primary_metric_name,
+            "secondary_metric_name": secondary_metric_name,
         }
+    history.setdefault("train_loss", [])
+    history.setdefault("val_loss", [])
+    history.setdefault("train_primary_metric", [])
+    history.setdefault("val_primary_metric", [])
+    history.setdefault("train_secondary_metric", [])
+    history.setdefault("val_secondary_metric", [])
+    history.setdefault("learning_rate", [])
+    history["primary_metric_name"] = primary_metric_name
+    history["secondary_metric_name"] = secondary_metric_name
 
     os.makedirs(save_dir, exist_ok=True)
     print(f"\nModel checkpoints will be saved to: {save_dir}")
@@ -439,6 +454,7 @@ def fine_tune_resnet_improved(
     print(f"Layer decay: {config.layer_decay}")
     print(f"Warmup epochs: {config.warmup_epochs}")
     print(f"Mixed precision: {config.mixed_precision}")
+    print(f"Primary metric: {get_metric_display_name(primary_metric_name)}")
     
     # Optional BN Recalibration
     # recalibrate_bn(model, train_loader, device, 100)
@@ -456,7 +472,7 @@ def fine_tune_resnet_improved(
         if warmup_scheduler and epoch <= config.warmup_epochs:
             warmup_scheduler.step()
 
-        train_loss, train_top1, train_top5 = train_one_epoch_r50(
+        train_loss, train_metrics = train_one_epoch_r50(
             model,
             train_loader,
             criterion,
@@ -467,7 +483,7 @@ def fine_tune_resnet_improved(
             scaler,
         )
 
-        val_loss, val_top1, val_top5 = validate_one_epoch_r50(
+        val_loss, val_metrics = validate_one_epoch_r50(
             model, val_loader, criterion, config, device
         )
 
@@ -475,28 +491,44 @@ def fine_tune_resnet_improved(
             scheduler.step()
 
         current_lr = optimizer.param_groups[0]["lr"]
+        train_primary = get_primary_metric_value(train_metrics, config)
+        val_primary = get_primary_metric_value(val_metrics, config)
+        train_secondary = get_secondary_metric_value(train_metrics, config)
+        val_secondary = get_secondary_metric_value(val_metrics, config)
         history["train_loss"].append(train_loss)
-        history["train_top1"].append(train_top1)
-        history["train_top5"].append(train_top5)
         history["val_loss"].append(val_loss)
-        history["val_top1"].append(val_top1)
-        history["val_top5"].append(val_top5)
+        history["train_primary_metric"].append(train_primary)
+        history["val_primary_metric"].append(val_primary)
+        history["train_secondary_metric"].append(train_secondary)
+        history["val_secondary_metric"].append(val_secondary)
         history["learning_rate"].append(current_lr)
+        if primary_metric_name == "top1":
+            history.setdefault("train_top1", []).append(train_primary)
+            history.setdefault("val_top1", []).append(val_primary)
+        if secondary_metric_name == "top5":
+            history.setdefault("train_top5", []).append(train_secondary if train_secondary is not None else 0.0)
+            history.setdefault("val_top5", []).append(val_secondary if val_secondary is not None else 0.0)
 
+        train_summary = f"Loss={train_loss:.4f}, {primary_metric_name}={train_primary:.4f}"
+        val_summary = f"Loss={val_loss:.4f}, {primary_metric_name}={val_primary:.4f}"
+        if train_secondary is not None and secondary_metric_name is not None:
+            train_summary += f", {secondary_metric_name}={train_secondary:.4f}"
+        if val_secondary is not None and secondary_metric_name is not None:
+            val_summary += f", {secondary_metric_name}={val_secondary:.4f}"
         print(
             f"Epoch {epoch:3d}/{config.fine_tune_epochs} | "
-            f"Train: Loss={train_loss:.4f}, Top1={train_top1:.2f}%, Top5={train_top5:.2f}% | "
-            f"Val: Loss={val_loss:.4f}, Top1={val_top1:.2f}%, Top5={val_top5:.2f}% | "
+            f"Train: {train_summary} | "
+            f"Val: {val_summary} | "
             f"LR={current_lr:.2e}"
         )
         torch.save(model.state_dict(), os.path.join(save_dir, f"epoch{epoch}.pth"))
 
-        if val_top1 > best_val_acc:
-            best_val_acc = val_top1
+        if is_better_metric(val_primary, best_val_primary, config):
+            best_val_primary = val_primary
             best_epoch = epoch
             best_state_dict = copy.deepcopy(model.state_dict())
             torch.save(best_state_dict, os.path.join(save_dir, "best_model.pth"))
-            print(f"NEW BEST MODEL, Epoch {epoch} (Top1: {best_val_acc:.2f}%)")
+            print(f"NEW BEST MODEL, Epoch {epoch} ({primary_metric_name}: {best_val_primary:.4f})")
 
         early_stopping(val_loss, model)
         if early_stopping.early_stop:
@@ -506,19 +538,20 @@ def fine_tune_resnet_improved(
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
         print(
-            f"\nLoaded best model from epoch {best_epoch} with validation accuracy: {best_val_acc:.2f}%"
+            f"\nLoaded best model from epoch {best_epoch} with validation {primary_metric_name}: {best_val_primary:.4f}"
         )
 
-    from utils.metrics import evaluate_with_topk_r50
-
     eval_loader = test_loader if test_loader is not None else val_loader
-    test_top1, test_top5 = evaluate_with_topk_r50(model, eval_loader, config=config, device=device)
+    test_metrics = evaluate_model(model, eval_loader, config=config, device=device)
 
     print("\nFine-tuning completed.")
-    print(f"Best validation accuracy: Top1={best_val_acc:.2f}% (epoch {best_epoch})")
+    if best_val_primary is not None:
+        print(f"Best validation {primary_metric_name}: {best_val_primary:.4f} (epoch {best_epoch})")
 
     with open(final_info_path, "w") as f:
-        f.write(f"Best Top-1: {best_val_acc:.2f}% at epoch {best_epoch}\n")
-        f.write(f"Final Test Top-1: {test_top1:.2f}%\n")
+        if best_val_primary is not None:
+            f.write(f"Best {primary_metric_name}: {best_val_primary:.6f} at epoch {best_epoch}\n")
+        for metric_name, metric_value in test_metrics.items():
+            f.write(f"Final Test {metric_name}: {metric_value:.6f}\n")
 
-    return test_top1, test_top5, history
+    return test_metrics, history

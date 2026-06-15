@@ -12,6 +12,8 @@ from torchvision.models import (
 )
 from typing import Tuple, Dict, Any, List
 
+from utils.task_utils import get_output_dim
+
 
 class FlattenMLP(nn.Module):
     """Simple MLP that flattens image inputs internally."""
@@ -105,13 +107,16 @@ def setup_builtin_model(
     """Load one of the built-in models and return model + metadata."""
     normalized = model_name.strip().lower()
     family = get_model_family(normalized)
+    output_dim = get_output_dim(config)
 
     if normalized in {"resnet18", "resnet34", "resnet50"}:
         builder, weights = _resnet_weights_and_builder(normalized, pretrained)
         model = builder(weights=weights)
+        model.fc = nn.Linear(model.fc.in_features, output_dim)
         print(
             f"Loaded {normalized} "
-            f"{'with pretrained weights' if pretrained else 'without pretraining'}"
+            f"{'with pretrained weights' if pretrained else 'without pretraining'} "
+            f"(output_dim={output_dim})"
         )
     elif normalized == "simple_cnn":
         model = SimpleCNN(
@@ -119,7 +124,7 @@ def setup_builtin_model(
             input_height=int(getattr(config, "input_height", 224)),
             input_width=int(getattr(config, "input_width", 224)),
             channels=list(getattr(config, "cnn_channels", [32, 64, 128])),
-            num_classes=int(getattr(config, "num_classes", 1000)),
+            num_classes=output_dim,
         )
         print("Loaded built-in simple_cnn")
     elif normalized == "mlp_small":
@@ -128,7 +133,7 @@ def setup_builtin_model(
             input_height=int(getattr(config, "input_height", 224)),
             input_width=int(getattr(config, "input_width", 224)),
             hidden_dims=[512, 256],
-            num_classes=int(getattr(config, "num_classes", 1000)),
+            num_classes=output_dim,
         )
         print("Loaded built-in mlp_small")
     elif normalized == "mlp_medium":
@@ -137,7 +142,7 @@ def setup_builtin_model(
             input_height=int(getattr(config, "input_height", 224)),
             input_width=int(getattr(config, "input_width", 224)),
             hidden_dims=list(getattr(config, "mlp_hidden_dims", [1024, 512])),
-            num_classes=int(getattr(config, "num_classes", 1000)),
+            num_classes=output_dim,
         )
         print("Loaded built-in mlp_medium")
     else:

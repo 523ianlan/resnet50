@@ -9,6 +9,14 @@ from typing import Dict, List, Any, Optional
 import gc
 import time
 
+from utils.task_utils import (
+    get_metric_display_name,
+    get_primary_metric_name,
+    get_primary_metric_value,
+    get_secondary_metric_name,
+    is_higher_better,
+)
+
 
 class ModelStructureManager:
     """Model structure manager - Shared with ViT version"""
@@ -89,12 +97,12 @@ class ModelStructureManager:
         keep_ratios: Dict,
         layer_importance_stage1: Dict,
         save_path: str,
-        original_accuracy: Dict,
-        pruned_accuracy: Dict,
-        test_accuracy: Dict = None,
+        original_metrics: Dict,
+        pruned_metrics: Dict,
+        test_metrics: Dict = None,
         config: Dict = None
     ):
-        """Save complete pruned model information"""
+        """Save complete pruned model information."""
         print(f"\nSaving complete model information to {save_path}")
         
         model_structure = ModelStructureManager.analyze_model_structure(pruned_model)
@@ -105,13 +113,18 @@ class ModelStructureManager:
             'pruning_details': pruning_details,
             'keep_ratios': keep_ratios,
             'layer_importance_stage1': layer_importance_stage1,
-            'original_accuracy': original_accuracy,
-            'pruned_accuracy': pruned_accuracy,
+            'original_metrics': original_metrics,
+            'pruned_metrics': pruned_metrics,
             'config': config if config else {}
         }
+
+        # Backward-compatible aliases for older readers.
+        saved_data['original_accuracy'] = original_metrics
+        saved_data['pruned_accuracy'] = pruned_metrics
         
-        if test_accuracy is not None:
-            saved_data['test_accuracy'] = test_accuracy
+        if test_metrics is not None:
+            saved_data['test_metrics'] = test_metrics
+            saved_data['test_accuracy'] = test_metrics
         
         torch.save(saved_data, save_path)
         
@@ -127,12 +140,13 @@ class ModelStructureManager:
                     'avg_keep_ratio': float(np.mean(list(keep_ratios.values())) if keep_ratios else 0),
                     'compression_percentage': int(config.get('target_compression', 0) * 100) if config else 0
                 },
-                'accuracy_info': {
-                    'original': original_accuracy,
-                    'pruned': pruned_accuracy,
-                    'test': test_accuracy if test_accuracy else {}
+                'metrics_info': {
+                    'original': original_metrics,
+                    'pruned': pruned_metrics,
+                    'test': test_metrics if test_metrics else {}
                 }
             }
+            json_data['accuracy_info'] = json_data['metrics_info']
             json.dump(json_data, f, indent=2, default=str)
         
         print(f"Complete model saved to: {save_path}")
@@ -151,12 +165,9 @@ def generate_report(
     pruning_details: Dict,
     orig_params: int,
     pruned_params: int,  # This parameter might not be used, recalculated from pruning_details
-    orig_top1: float,
-    orig_top5: float,
-    pruned_top1: float,
-    pruned_top5: float,
-    final_top1: float,
-    final_top5: float,
+    orig_metrics: Dict[str, float],
+    pruned_metrics: Dict[str, float],
+    final_metrics: Dict[str, float],
     orig_flops: float = None,
     pruned_flops: float = None,
     history: Dict = None
@@ -175,20 +186,21 @@ def generate_report(
         pruning_details: Pruning details (includes pruned rank per layer etc)
         orig_params: Original parameter count
         pruned_params: Pruned parameter count
-        orig_top1: Original Top-1 accuracy
-        orig_top5: Original Top-5 accuracy
-        pruned_top1: Pruned Top-1 accuracy
-        pruned_top5: Pruned Top-5 accuracy
-        final_top1: Fine-tuned Top-1 accuracy
-        final_top5: Fine-tuned Top-5 accuracy
+        orig_metrics: Original evaluation metrics
+        pruned_metrics: Pruned evaluation metrics
+        final_metrics: Fine-tuned evaluation metrics
         orig_flops: Original FLOPs
         pruned_flops: Pruned FLOPs
-        history: Training history (includes loss and accuracy per epoch)
+        history: Training history
     
     Returns:
         Report file path
     """
     report_lines = []
+    primary_metric_name = get_primary_metric_name(config)
+    secondary_metric_name = get_secondary_metric_name(config)
+    primary_display = get_metric_display_name(primary_metric_name)
+    secondary_display = "-" if secondary_metric_name is None else get_metric_display_name(secondary_metric_name)
     
     # ========== Recalculate pruned params from pruning_details ==========
     calculated_pruned_params = 0
@@ -248,6 +260,7 @@ def generate_report(
     report_lines.append("=" * 100)
     report_lines.append(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     report_lines.append(f"Model: ResNet-50")
+    report_lines.append(f"Task Type: {getattr(config, 'task_type', 'classification')}")
     report_lines.append("")
     
     # ========== Config Summary ==========
@@ -255,6 +268,7 @@ def generate_report(
     report_lines.append("PRUNING CONFIGURATION")
     report_lines.append("-" * 100)
     report_lines.append(f"Target Compression: {config.target_compression:.1%}")
+    report_lines.append(f"Loss Name: {getattr(config, 'loss_name', 'auto')}")
     report_lines.append(f"Min Rank: {config.min_rank}")
     report_lines.append(f"MC Samples (Stage 1): {config.mc_samples}")
     report_lines.append(f"MC Dropout p (Stage 1): {getattr(config, 'mc_dropout_p', 'na')}")
@@ -372,28 +386,35 @@ def generate_report(
         report_lines.append("FINE-TUNING LOG")
         report_lines.append("=" * 100)
         total_epochs = config.fine_tune_epochs if hasattr(config, 'fine_tune_epochs') else len(history['train_loss'])
-        best_val_top1 = float("-inf")
+        best_val_primary = None
         best_val_loss = None
         min_delta = getattr(config, 'early_stopping_min_delta', 0)
         num_epochs = len(history['train_loss'])
         for i in range(num_epochs):
             epoch = i + 1
             train_loss = history['train_loss'][i]
-            train_top1 = history['train_top1'][i]
-            train_top5 = history['train_top5'][i] if 'train_top5' in history and i < len(history['train_top5']) else 0
             val_loss = history['val_loss'][i] if i < len(history['val_loss']) else 0
-            val_top1 = history['val_top1'][i] if i < len(history['val_top1']) else 0
-            val_top5 = history['val_top5'][i] if 'val_top5' in history and i < len(history['val_top5']) else 0
+            train_primary = history['train_primary_metric'][i] if i < len(history.get('train_primary_metric', [])) else 0
+            val_primary = history['val_primary_metric'][i] if i < len(history.get('val_primary_metric', [])) else 0
+            train_secondary = history['train_secondary_metric'][i] if i < len(history.get('train_secondary_metric', [])) else None
+            val_secondary = history['val_secondary_metric'][i] if i < len(history.get('val_secondary_metric', [])) else None
             lr = history['learning_rate'][i] if i < len(history['learning_rate']) else 0
 
-            report_lines.append(
-                f"Epoch {epoch:>3d}/{total_epochs} | Train: Loss={train_loss:.4f}, Top1={train_top1:.2f}%,  Top5={train_top5:.2f}%| "
-                f"Val: Loss={val_loss:.4f}, Top1={val_top1:.2f}%, Top5={val_top5:.2f}% | LR={lr:.2e}"
-            )
+            train_summary = f"Loss={train_loss:.4f}, {primary_metric_name}={train_primary:.4f}"
+            val_summary = f"Loss={val_loss:.4f}, {primary_metric_name}={val_primary:.4f}"
+            if train_secondary is not None and secondary_metric_name is not None:
+                train_summary += f", {secondary_metric_name}={train_secondary:.4f}"
+            if val_secondary is not None and secondary_metric_name is not None:
+                val_summary += f", {secondary_metric_name}={val_secondary:.4f}"
+            report_lines.append(f"Epoch {epoch:>3d}/{total_epochs} | Train: {train_summary} | Val: {val_summary} | LR={lr:.2e}")
 
-            if val_top1 > best_val_top1:
-                best_val_top1 = val_top1
-                report_lines.append(f"  New best model saved (Top1: {best_val_top1:.2f}%)")
+            if best_val_primary is None or (
+                is_higher_better(config) and val_primary > best_val_primary
+            ) or (
+                not is_higher_better(config) and val_primary < best_val_primary
+            ):
+                best_val_primary = val_primary
+                report_lines.append(f"  New best model saved ({primary_metric_name}: {best_val_primary:.4f})")
 
             if best_val_loss is None:
                 best_val_loss = val_loss
@@ -403,17 +424,35 @@ def generate_report(
 
         report_lines.append("")
 
-    # ========== ACCURACY RESULTS ==========
+    # ========== METRIC RESULTS ==========
     report_lines.append("=" * 100)
-    report_lines.append("ACCURACY RESULTS")
+    report_lines.append("METRIC RESULTS")
     report_lines.append("=" * 100)
-    report_lines.append(f"{'Model State':<25} {'Top-1 Acc':<12} {'Top-5 Acc':<12} {'Change':<12}")
+    report_lines.append(f"{'Model State':<25} {primary_display:<20} {secondary_display:<20} {'Change':<12}")
     report_lines.append("-" * 100)
-    report_lines.append(f"{'Original':<25} {orig_top1:>10.2f}%    {orig_top5:>10.2f}%    {'-':<12}")
-    report_lines.append(f"{'Pruned (No FT)':<25} {pruned_top1:>10.2f}%    {pruned_top5:>10.2f}%    "
-                        f"{pruned_top1 - orig_top1:>+10.2f}%")
-    report_lines.append(f"{'Final (After FT)':<25} {final_top1:>10.2f}%    {final_top5:>10.2f}%    "
-                        f"{final_top1 - orig_top1:>+10.2f}%")
+    orig_primary = get_primary_metric_value(orig_metrics, config)
+    pruned_primary = get_primary_metric_value(pruned_metrics, config)
+    final_primary = get_primary_metric_value(final_metrics, config)
+    orig_secondary = pruned_secondary = final_secondary = None
+    if secondary_metric_name is not None:
+        orig_secondary = orig_metrics.get(secondary_metric_name)
+        pruned_secondary = pruned_metrics.get(secondary_metric_name)
+        final_secondary = final_metrics.get(secondary_metric_name)
+
+    def _fmt_metric(value):
+        return "-" if value is None else f"{value:.4f}"
+
+    report_lines.append(
+        f"{'Original':<25} {_fmt_metric(orig_primary):<20} {_fmt_metric(orig_secondary):<20} {'-':<12}"
+    )
+    report_lines.append(
+        f"{'Pruned (No FT)':<25} {_fmt_metric(pruned_primary):<20} {_fmt_metric(pruned_secondary):<20} "
+        f"{pruned_primary - orig_primary:+.4f}"
+    )
+    report_lines.append(
+        f"{'Final (After FT)':<25} {_fmt_metric(final_primary):<20} {_fmt_metric(final_secondary):<20} "
+        f"{final_primary - orig_primary:+.4f}"
+    )
     report_lines.append("")
     report_lines.append("=" * 100)
     report_lines.append("RESOURCE SUMMARY")
@@ -436,14 +475,14 @@ def generate_report(
     report_lines.append("CONCLUSION")
     report_lines.append("=" * 100)
     
-    final_change = final_top1 - orig_top1
+    final_change = final_primary - orig_primary
     target_comp = config.target_compression * 100
     actual_comp = 100 * (1 - final_pruned_params / orig_params) if orig_params > 0 else 0
     
     report_lines.append(f"Target Compression: {target_comp:.1f}%")
     report_lines.append(f"Achieved Compression: {actual_comp:.1f}%")
-    report_lines.append(f"Final Accuracy Change: {final_change:+.2f}%")
-    report_lines.append(f"Final Model Top-1: {final_top1:.2f}%")
+    report_lines.append(f"Final {primary_metric_name} Change: {final_change:+.4f}")
+    report_lines.append(f"Final Model {primary_metric_name}: {final_primary:.4f}")
     report_lines.append("")
     report_lines.append("=" * 100)
     

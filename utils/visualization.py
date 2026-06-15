@@ -8,12 +8,20 @@ import torch
 import torch.nn as nn
 from typing import Dict, List, Optional, Tuple
 
+from utils.task_utils import get_metric_display_name
+
 
 def plot_training_history(history: Dict, save_dir: str):
     """Plot training history"""
     os.makedirs(save_dir, exist_ok=True)
     
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    primary_metric_name = history.get('primary_metric_name', 'top1')
+    secondary_metric_name = history.get('secondary_metric_name', 'top5')
+    train_primary = history.get('train_primary_metric', history.get('train_top1', []))
+    val_primary = history.get('val_primary_metric', history.get('val_top1', []))
+    train_secondary = history.get('train_secondary_metric', history.get('train_top5', []))
+    val_secondary = history.get('val_secondary_metric', history.get('val_top5', []))
     
     # Loss curve
     axes[0, 0].plot(history['train_loss'], label='Train Loss', linewidth=2)
@@ -24,22 +32,27 @@ def plot_training_history(history: Dict, save_dir: str):
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
     
-    # Top-1 accuracy
-    axes[0, 1].plot(history['train_top1'], label='Train Top-1', linewidth=2)
-    axes[0, 1].plot(history['val_top1'], label='Val Top-1', linewidth=2)
+    # Primary metric
+    axes[0, 1].plot(train_primary, label='Train', linewidth=2)
+    axes[0, 1].plot(val_primary, label='Val', linewidth=2)
     axes[0, 1].set_xlabel('Epoch')
-    axes[0, 1].set_ylabel('Top-1 Accuracy (%)')
-    axes[0, 1].set_title('Top-1 Accuracy')
+    axes[0, 1].set_ylabel(get_metric_display_name(primary_metric_name))
+    axes[0, 1].set_title(get_metric_display_name(primary_metric_name))
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
     
-    # Top-5 accuracy
-    axes[1, 0].plot(history['train_top5'], label='Train Top-5', linewidth=2)
-    axes[1, 0].plot(history['val_top5'], label='Val Top-5', linewidth=2)
+    # Secondary metric
+    if train_secondary and val_secondary and any(v is not None for v in train_secondary + val_secondary):
+        safe_train_secondary = [np.nan if v is None else v for v in train_secondary]
+        safe_val_secondary = [np.nan if v is None else v for v in val_secondary]
+        axes[1, 0].plot(safe_train_secondary, label='Train', linewidth=2)
+        axes[1, 0].plot(safe_val_secondary, label='Val', linewidth=2)
+        axes[1, 0].legend()
+    else:
+        axes[1, 0].text(0.5, 0.5, 'No secondary metric', ha='center', va='center')
     axes[1, 0].set_xlabel('Epoch')
-    axes[1, 0].set_ylabel('Top-5 Accuracy (%)')
-    axes[1, 0].set_title('Top-5 Accuracy')
-    axes[1, 0].legend()
+    axes[1, 0].set_ylabel(get_metric_display_name(secondary_metric_name))
+    axes[1, 0].set_title(get_metric_display_name(secondary_metric_name))
     axes[1, 0].grid(True, alpha=0.3)
     
     # Learning rate curve

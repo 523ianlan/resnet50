@@ -23,13 +23,23 @@ from pruning.stage2_fisher import compute_fisher_impact_stage2_r50
 from pruning.allocation import allocate_pruning_binary_search_r50
 from pruning.core import replace_prunable_layer
 from utils.engine import fine_tune_resnet_improved
-from utils.metrics import evaluate_with_topk_r50, compute_flops_resnet
+from utils.metrics import compute_flops_resnet, evaluate_model
 from utils.visualization import (
     plot_training_history,
     plot_layer_budget_allocation_r50,
     analyze_all_layer_sensitivity_r50
 )
 from utils.helpers import ModelStructureManager, generate_report, batch_clean_experiment
+from utils.task_utils import (
+    get_metric_display_name,
+    get_output_dim,
+    get_primary_metric_name,
+    get_primary_metric_value,
+    get_secondary_metric_name,
+    get_secondary_metric_value,
+    get_task_type,
+    is_regression_task,
+)
 
 
 def _format_tag_value(value) -> str:
@@ -91,6 +101,7 @@ def build_pruning_config(
         else:
             raise AttributeError(f"Unknown config field: {key}")
 
+    _configure_task_defaults(config)
     config._compression_percentage = int(config.target_compression * 100)
     return config
 
@@ -223,6 +234,72 @@ def _parse_int_list(value: Optional[str]):
     return [int(part.strip()) for part in value.split(",") if part.strip()]
 
 
+def _parse_str_list(value: Optional[str]):
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _configure_task_defaults(config: PruningConfig):
+    task_type = get_task_type(config)
+    target_columns = getattr(config, "target_columns", None)
+    if isinstance(target_columns, str):
+        target_columns = [part.strip() for part in target_columns.split(",") if part.strip()]
+        config.target_columns = target_columns
+    if isinstance(target_columns, list) and target_columns:
+        config.target_dim = len(target_columns)
+    if task_type == "regression":
+        if getattr(config, "dataset_type", "imagefolder") == "imagefolder":
+            config.dataset_type = "csv_regression"
+        if getattr(config, "loss_name", None) in {None, "", "cross_entropy"}:
+            config.loss_name = "mse"
+        if getattr(config, "primary_metric", None) in {None, "", "top1"}:
+            config.primary_metric = "rmse"
+        if getattr(config, "secondary_metric", None) in {None, "", "top5"}:
+            config.secondary_metric = "mae"
+        config.higher_is_better = False
+    else:
+        if getattr(config, "dataset_type", None) in {None, "", "csv_regression"}:
+            config.dataset_type = "imagefolder"
+        if getattr(config, "loss_name", None) in {None, "", "mse"}:
+            config.loss_name = "cross_entropy"
+        if getattr(config, "primary_metric", None) in {None, "", "rmse"}:
+            config.primary_metric = "top1"
+        if getattr(config, "secondary_metric", None) in {None, "", "mae"}:
+            config.secondary_metric = "top5"
+        config.higher_is_better = True
+
+
+def _format_metric_value(metric_name: Optional[str], metric_value: Optional[float]) -> str:
+    if metric_name is None or metric_value is None:
+        return "-"
+    label = get_metric_display_name(metric_name)
+    return f"{label}={metric_value:.4f}"
+
+
+def _print_metric_summary(title: str, metrics: Dict[str, float], config: PruningConfig, baseline_metrics: Optional[Dict[str, float]] = None):
+    primary_metric_name = get_primary_metric_name(config)
+    secondary_metric_name = get_secondary_metric_name(config)
+    primary_value = get_primary_metric_value(metrics, config)
+    secondary_value = get_secondary_metric_value(metrics, config)
+
+    print(f"\n{title}:")
+    print(f"  {_format_metric_value(primary_metric_name, primary_value)}")
+    if secondary_value is not None and secondary_metric_name is not None:
+        print(f"  {_format_metric_value(secondary_metric_name, secondary_value)}")
+
+    if baseline_metrics is not None:
+        baseline_primary = get_primary_metric_value(baseline_metrics, config)
+        print(f"  Primary Change: {primary_value - baseline_primary:+.4f}")
+
+
+def _flatten_metric_result(prefix: str, metrics: Dict[str, float]) -> Dict[str, float]:
+    return {f"{prefix}_{name}": value for name, value in metrics.items()}
+
+
 def main_r50(
     config: Optional[PruningConfig] = None,
     model: Optional[nn.Module] = None,
@@ -304,16 +381,16 @@ def main_r50(
         config.model_prefix = resolved_family
     config.experiment_name = f"{model_name}_SecondOrderPruning_{int(config.target_compression*100)}pr"
     print(f"Model: {model_name} | Family: {resolved_family}")
+    print(f"Task: {get_task_type(config)} | Output dim: {get_output_dim(config)}")
     
     # ========== 3. Evaluate Original Model ==========
     print("\n3. Evaluating original model")
-    orig_top1, orig_top5 = evaluate_with_topk_r50(model, val_loader, config=config)
+    orig_metrics = evaluate_model(model, val_loader, config=config)
     orig_params = sum(p.numel() for p in model.parameters())
     orig_flops = _safe_compute_flops(model, config)
     
     print(f"\nOriginal Model Results:")
-    print(f"  Top-1 Accuracy: {orig_top1:.2f}%")
-    print(f"  Top-5 Accuracy: {orig_top5:.2f}%")
+    _print_metric_summary("Original Metrics", orig_metrics, config)
     print(f"  Parameters: {orig_params/1e6:.2f}M")
     if orig_flops:
         print(f"  FLOPs: {orig_flops/1e9:.2f}G")
@@ -327,9 +404,9 @@ def main_r50(
         ModelStructureManager.save_complete_model(
             model, {}, {}, {},
             before_finetune_path,
-            {'top1': orig_top1, 'top5': orig_top5},
-            {'top1': orig_top1, 'top5': orig_top5},
-            test_accuracy={'top1': orig_top1, 'top5': orig_top5},
+            orig_metrics,
+            orig_metrics,
+            test_metrics=orig_metrics,
             config=config_dict
         )
 
@@ -344,9 +421,9 @@ def main_r50(
             pruning_details={},
             orig_params=orig_params,
             pruned_params=orig_params,
-            orig_top1=orig_top1, orig_top5=orig_top5,
-            pruned_top1=orig_top1, pruned_top5=orig_top5,
-            final_top1=orig_top1, final_top5=orig_top5,
+            orig_metrics=orig_metrics,
+            pruned_metrics=orig_metrics,
+            final_metrics=orig_metrics,
             orig_flops=orig_flops,
             pruned_flops=orig_flops,
             history=None
@@ -361,12 +438,9 @@ def main_r50(
             "component_impact_scores": {},
             "history": None,
             "metrics": {
-                "orig_top1": orig_top1,
-                "orig_top5": orig_top5,
-                "pruned_top1": orig_top1,
-                "pruned_top5": orig_top5,
-                "final_top1": orig_top1,
-                "final_top5": orig_top5,
+                **_flatten_metric_result("orig", orig_metrics),
+                **_flatten_metric_result("pruned", orig_metrics),
+                **_flatten_metric_result("final", orig_metrics),
                 "orig_params": orig_params,
                 "pruned_params": orig_params,
                 "orig_flops": orig_flops,
@@ -523,7 +597,7 @@ def main_r50(
     
     # ========== 8. Evaluate Pruned Model ==========
     print("\n8. Evaluating pruned model (before fine-tuning)")
-    pruned_top1, pruned_top5 = evaluate_with_topk_r50(pruned_model, val_loader, config=config)
+    pruned_metrics = evaluate_model(pruned_model, val_loader, config=config)
     pruned_params = sum(p.numel() for p in pruned_model.parameters())
     
     # ========== 9. Save Model (Before FT) ==========
@@ -534,8 +608,8 @@ def main_r50(
     ModelStructureManager.save_complete_model(
         pruned_model, pruning_details, keep_ratios, layer_importance_stage1,
         before_finetune_path,
-        {'top1': orig_top1, 'top5': orig_top5},
-        {'top1': pruned_top1, 'top5': pruned_top5},
+        orig_metrics,
+        pruned_metrics,
         config=config_dict
     )
     
@@ -545,15 +619,12 @@ def main_r50(
     print("="*80)
     
     param_reduction = 100 * (1 - pruned_params / orig_params)
-    top1_change = pruned_top1 - orig_top1
-    top5_change = pruned_top5 - orig_top5
     
     print(f"\nOriginal Model:")
     print(f"  Parameters: {orig_params/1e6:.2f}M")
     if orig_flops:
         print(f"  FLOPs: {orig_flops/1e9:.2f}G")
-    print(f"  Top-1 Accuracy: {orig_top1:.2f}%")
-    print(f"  Top-5 Accuracy: {orig_top5:.2f}%")
+    _print_metric_summary("Original Metrics", orig_metrics, config)
     
     print(f"\nPruned Model (Before Fine-tuning):")
     print(f"  Parameters: {pruned_params/1e6:.2f}M ({param_reduction:.1f}% reduction)")
@@ -562,8 +633,7 @@ def main_r50(
         flops_reduction = 100 * (1 - pruned_flops / orig_flops)
         print(f"  FLOPs: {pruned_flops/1e9:.2f}G ({flops_reduction:.1f}% reduction)")
     
-    print(f"  Top-1 Accuracy: {pruned_top1:.2f}% ({top1_change:+.2f}%)")
-    print(f"  Top-5 Accuracy: {pruned_top5:.2f}% ({top5_change:+.2f}%)")
+    _print_metric_summary("Pruned Metrics", pruned_metrics, config, baseline_metrics=orig_metrics)
     
     # Layer statistics
     print(f"\n10. Layer Statistics:")
@@ -578,12 +648,12 @@ def main_r50(
     print("\n10. Starting fine-tuning")
     
     final_model = pruned_model
-    final_top1, final_top5 = pruned_top1, pruned_top5
+    final_metrics = dict(pruned_metrics)
     fine_tune_history = None
     ft_dir = os.path.join(save_dir, 'finetunemodel')
     
     if config.fine_tune_epochs > 0:
-        final_top1, final_top5, fine_tune_history = fine_tune_resnet_improved(
+        final_metrics, fine_tune_history = fine_tune_resnet_improved(
             model=pruned_model,
             train_loader=train_loader,
             val_loader=val_loader,
@@ -591,16 +661,18 @@ def main_r50(
             config=config,
             save_dir=ft_dir
         )
+        plot_training_history(fine_tune_history, ft_dir)
         
         # Save fine-tuned model
         ModelStructureManager.save_complete_model(
             final_model, pruning_details, keep_ratios, layer_importance_stage1,
             finetuned_path,
-            {'top1': orig_top1, 'top5': orig_top5},
-            {'top1': final_top1, 'top5': final_top5},
-            test_accuracy={'top1': final_top1, 'top5': final_top5},
+            orig_metrics,
+            final_metrics,
+            test_metrics=final_metrics,
             config=config_dict
         )
+        _print_metric_summary("Fine-tuned Metrics", final_metrics, config, baseline_metrics=orig_metrics)
     
     # ========== 11. Generate Report ==========
     print("\n11. Generating final report")
@@ -615,9 +687,9 @@ def main_r50(
     pruning_details=pruning_details,
     orig_params=orig_params,
     pruned_params=pruned_params,  # Can pass, but function recalculates
-    orig_top1=orig_top1, orig_top5=orig_top5,
-    pruned_top1=pruned_top1, pruned_top5=pruned_top5,
-    final_top1=final_top1, final_top5=final_top5,
+    orig_metrics=orig_metrics,
+    pruned_metrics=pruned_metrics,
+    final_metrics=final_metrics,
     orig_flops=orig_flops,
     pruned_flops=pruned_flops,
     history=fine_tune_history  # Ensure history is passed
@@ -640,12 +712,9 @@ def main_r50(
         "component_impact_scores": component_impact_scores,
         "history": fine_tune_history,
         "metrics": {
-            "orig_top1": orig_top1,
-            "orig_top5": orig_top5,
-            "pruned_top1": pruned_top1,
-            "pruned_top5": pruned_top5,
-            "final_top1": final_top1,
-            "final_top5": final_top5,
+            **_flatten_metric_result("orig", orig_metrics),
+            **_flatten_metric_result("pruned", pruned_metrics),
+            **_flatten_metric_result("final", final_metrics),
             "orig_params": orig_params,
             "pruned_params": pruned_params,
             "orig_flops": orig_flops,
@@ -798,6 +867,26 @@ def main():
                         help='Model input width for built-in toy models')
     parser.add_argument('--num-classes', type=int, default=None,
                         help='Number of output classes for built-in toy models')
+    parser.add_argument('--task-type', type=str, choices=['classification', 'regression'], default=None,
+                        help='Problem type')
+    parser.add_argument('--dataset-type', type=str, choices=['imagefolder', 'csv_regression'], default=None,
+                        help='Dataset loader type')
+    parser.add_argument('--loss-name', type=str, choices=['cross_entropy', 'mse', 'l1', 'smooth_l1'], default=None,
+                        help='Loss function name')
+    parser.add_argument('--target-dim', type=int, default=None,
+                        help='Regression target dimension')
+    parser.add_argument('--train-csv', type=str, default=None,
+                        help='Training CSV path for regression mode')
+    parser.add_argument('--val-csv', type=str, default=None,
+                        help='Validation CSV path for regression mode')
+    parser.add_argument('--image-column', type=str, default=None,
+                        help='CSV column that stores image paths')
+    parser.add_argument('--target-column', type=str, default=None,
+                        help='Single CSV target column for regression mode')
+    parser.add_argument('--target-columns', type=str, default=None,
+                        help='Comma-separated CSV target columns for regression mode')
+    parser.add_argument('--csv-delimiter', type=str, default=None,
+                        help='CSV delimiter for regression annotations')
     parser.add_argument('--mlp-hidden-dims', type=str, default=None,
                         help='Comma-separated hidden dims for mlp_medium, e.g. 1024,512')
     parser.add_argument('--cnn-channels', type=str, default=None,
@@ -936,7 +1025,13 @@ def main():
     parsed_cnn_channels = _parse_int_list(args.cnn_channels)
     if parsed_cnn_channels is not None:
         config.cnn_channels = parsed_cnn_channels
-    
+
+    parsed_target_columns = _parse_str_list(args.target_columns)
+    if parsed_target_columns is not None:
+        config.target_columns = parsed_target_columns
+
+    _configure_task_defaults(config)
+     
     # Special handling for boolean flags
     if args.use_mixup is not None:
         if 'augmentation' not in config.__dict__:

@@ -1,14 +1,18 @@
 """ResNet Data Loader builder - Corresponds to ViT build.py"""
 
+import csv
+import os
 import torch
 import random
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision.datasets import ImageFolder
+from torchvision.datasets.folder import default_loader
 import numpy as np
-from typing import Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any
 
 from .transforms import get_resnet_train_transform, get_resnet_val_transform
 from configs.config import PruningConfig
+from utils.task_utils import is_regression_task
 
 
 def _seed_worker(worker_id: int):
@@ -85,6 +89,69 @@ class CUDAPrefetcher:
         return batch
 
 
+class CSVRegressionDataset(Dataset):
+    """Image regression dataset backed by a CSV annotation file."""
+
+    def __init__(
+        self,
+        csv_path: str,
+        image_root: Optional[str] = None,
+        transform=None,
+        image_column: str = "image_path",
+        target_columns: Optional[List[str]] = None,
+        delimiter: str = ",",
+    ):
+        if target_columns is None or len(target_columns) == 0:
+            target_columns = ["target"]
+
+        self.csv_path = csv_path
+        self.image_root = image_root
+        self.transform = transform
+        self.image_column = image_column
+        self.target_columns = list(target_columns)
+        self.delimiter = delimiter
+        self.loader = default_loader
+        self.samples = []
+
+        csv_dir = os.path.dirname(os.path.abspath(csv_path))
+        default_root = image_root if image_root else csv_dir
+
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f, delimiter=delimiter)
+            if reader.fieldnames is None:
+                raise ValueError(f"CSV file has no header: {csv_path}")
+            missing = [col for col in [image_column] + self.target_columns if col not in reader.fieldnames]
+            if missing:
+                raise ValueError(f"Missing columns in {csv_path}: {missing}")
+
+            for row in reader:
+                image_rel_path = row[image_column].strip()
+                image_path = image_rel_path
+                if not os.path.isabs(image_path):
+                    image_path = os.path.join(default_root, image_rel_path)
+
+                targets = [float(row[col]) for col in self.target_columns]
+                self.samples.append((image_path, targets))
+
+        if not self.samples:
+            raise ValueError(f"No samples found in regression CSV: {csv_path}")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        image_path, targets = self.samples[idx]
+        image = self.loader(image_path)
+        if self.transform is not None:
+            image = self.transform(image)
+
+        if len(targets) == 1:
+            target_tensor = torch.tensor(targets[0], dtype=torch.float32)
+        else:
+            target_tensor = torch.tensor(targets, dtype=torch.float32)
+        return image, target_tensor
+
+
 def _loader_common_kwargs(config: PruningConfig) -> Dict[str, Any]:
     kwargs = {
         "num_workers": config.num_workers,
@@ -95,6 +162,53 @@ def _loader_common_kwargs(config: PruningConfig) -> Dict[str, Any]:
     if config.num_workers > 0:
         kwargs["prefetch_factor"] = getattr(config, "prefetch_factor", 2)
     return kwargs
+
+
+def _resolve_target_columns(config: PruningConfig) -> List[str]:
+    target_columns = getattr(config, "target_columns", None)
+    if isinstance(target_columns, str):
+        target_columns = [part.strip() for part in target_columns.split(",") if part.strip()]
+    elif target_columns is not None:
+        target_columns = [str(part).strip() for part in target_columns if str(part).strip()]
+
+    if target_columns:
+        return target_columns
+    return [str(getattr(config, "target_column", "target"))]
+
+
+def _build_dataset(config: PruningConfig, split: str, transform):
+    if split not in {"train", "val"}:
+        raise ValueError(f"Unsupported split: {split}")
+
+    if not is_regression_task(config):
+        root = config.train_root if split == "train" else config.val_root
+        return ImageFolder(root=root, transform=transform)
+
+    csv_path = getattr(config, "train_csv", None) if split == "train" else getattr(config, "val_csv", None)
+    if not csv_path:
+        raise ValueError(
+            f"Regression mode requires config.{split}_csv when using built-in data loading."
+        )
+
+    target_columns = _resolve_target_columns(config)
+    image_column = str(getattr(config, "image_column", "image_path"))
+    delimiter = str(getattr(config, "csv_delimiter", ","))
+
+    image_root = getattr(config, "train_root", None) if split == "train" else getattr(config, "val_root", None)
+    return CSVRegressionDataset(
+        csv_path=csv_path,
+        image_root=image_root,
+        transform=transform,
+        image_column=image_column,
+        target_columns=target_columns,
+        delimiter=delimiter,
+    )
+
+
+def _build_datasets(config: PruningConfig, train_transform, val_transform):
+    train_dataset = _build_dataset(config, "train", train_transform)
+    val_dataset = _build_dataset(config, "val", val_transform)
+    return train_dataset, val_dataset
 
 
 def _build_calibration_subset(
@@ -155,22 +269,26 @@ def get_resnet_data_loaders_with_calib(
     train_transform = get_resnet_train_transform(config.augmentation['train'])
     val_transform = get_resnet_val_transform(config.augmentation['val'])
 
-    train_dataset = ImageFolder(
-        root=config.train_root,
-        transform=train_transform
-    )
-    val_dataset = ImageFolder(
-        root=config.val_root,
-        transform=val_transform
-    )
+    train_dataset, val_dataset = _build_datasets(config, train_transform, val_transform)
 
     # Optional calibration dataset (subset of train)
     calib_dataset = None
     if bool(getattr(config, "calib_use_val_transform", False)):
-        calib_base = ImageFolder(
-            root=config.train_root,
-            transform=val_transform
-        )
+        if is_regression_task(config):
+            target_columns = _resolve_target_columns(config)
+            calib_base = CSVRegressionDataset(
+                csv_path=getattr(config, "train_csv"),
+                image_root=getattr(config, "train_root", None),
+                transform=val_transform,
+                image_column=str(getattr(config, "image_column", "image_path")),
+                target_columns=target_columns,
+                delimiter=str(getattr(config, "csv_delimiter", ",")),
+            )
+        else:
+            calib_base = ImageFolder(
+                root=config.train_root,
+                transform=val_transform
+            )
         calib_dataset = _build_calibration_subset(config, calib_base)
     else:
         calib_dataset = _build_calibration_subset(config, train_dataset)
@@ -252,19 +370,19 @@ def get_resnet_data_loaders(
     # Load from path if datasets not provided
     if train_dataset is None:
         train_transform = get_resnet_train_transform(config.augmentation['train'])
-        print(f"Loading training data from: {config.train_root}")
-        train_dataset = ImageFolder(
-            root=config.train_root,
-            transform=train_transform
-        )
+        if is_regression_task(config):
+            print(f"Loading regression training data from: {getattr(config, 'train_csv', None)}")
+        else:
+            print(f"Loading training data from: {config.train_root}")
+        train_dataset = _build_dataset(config, "train", train_transform)
     
     if val_dataset is None:
         val_transform = get_resnet_val_transform(config.augmentation['val'])
-        print(f"Loading validation data from: {config.val_root}")
-        val_dataset = ImageFolder(
-            root=config.val_root,
-            transform=val_transform
-        )
+        if is_regression_task(config):
+            print(f"Loading regression validation data from: {getattr(config, 'val_csv', None)}")
+        else:
+            print(f"Loading validation data from: {config.val_root}")
+        val_dataset = _build_dataset(config, "val", val_transform)
     # DataLoader settings
     loader_kwargs = _loader_common_kwargs(config)
     generator = torch.Generator()
